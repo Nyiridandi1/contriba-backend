@@ -32,6 +32,17 @@ async function getPaypackToken() {
   return response.data.access;
 }
 
+// ── Format phone for Paypack ──
+function formatPhone(phone) {
+  if (!phone) return phone;
+  // Remove spaces and dashes
+  phone = phone.replace(/[\s-]/g, '');
+  // Keep as 07XXXXXXXX format for Paypack sandbox
+  if (phone.startsWith('+250')) return '0' + phone.slice(4);
+  if (phone.startsWith('250')) return '0' + phone.slice(3);
+  return phone;
+}
+
 // ── POST /api/payments/cashin ── Request Payment from User
 router.post('/cashin', async (req, res) => {
   try {
@@ -44,15 +55,18 @@ router.post('/cashin', async (req, res) => {
       });
     }
 
+    const formattedPhone = formatPhone(phone);
+    console.log(`Cashin: amount=${amount}, phone=${formattedPhone}`);
+
     // Get Paypack token
     const token = await getPaypackToken();
 
-    // Initiate cashin (collect money from user)
+    // Initiate cashin
     const response = await axios.post(
       'https://payments.paypack.rw/api/transactions/cashin',
       {
         amount: parseInt(amount),
-        number: phone,
+        number: formattedPhone,
       },
       {
         headers: {
@@ -96,7 +110,6 @@ router.post('/cashin', async (req, res) => {
 router.get('/status/:ref', async (req, res) => {
   try {
     const { ref } = req.params;
-
     const token = await getPaypackToken();
 
     const response = await axios.get(
@@ -120,13 +133,11 @@ router.get('/status/:ref', async (req, res) => {
         .single();
 
       if (contribution && contribution.status !== 'success') {
-        // Update contribution
         await supabase
           .from('contributions')
           .update({ status: 'success' })
           .eq('transaction_id', ref);
 
-        // Update event total raised
         const { data: event } = await supabase
           .from('events')
           .select('total_raised, owner_id')
@@ -139,7 +150,6 @@ router.get('/status/:ref', async (req, res) => {
             .update({ total_raised: (event.total_raised || 0) + contribution.amount })
             .eq('id', contribution.event_id);
 
-          // Update wallet
           const { data: wallet } = await supabase
             .from('wallets')
             .select('*')
@@ -156,7 +166,6 @@ router.get('/status/:ref', async (req, res) => {
               .eq('user_id', event.owner_id);
           }
 
-          // Send notification to event owner
           await supabase.from('notifications').insert({
             user_id: event.owner_id,
             title: 'New Contribution Received! 🎉',
@@ -195,7 +204,6 @@ router.post('/cashout', verifyToken, async (req, res) => {
       });
     }
 
-    // Check wallet balance
     const { data: wallet } = await supabase
       .from('wallets')
       .select('*')
@@ -209,14 +217,14 @@ router.post('/cashout', verifyToken, async (req, res) => {
       });
     }
 
+    const formattedPhone = formatPhone(phone);
     const token = await getPaypackToken();
 
-    // Initiate cashout (send money to user)
     const response = await axios.post(
       'https://payments.paypack.rw/api/transactions/cashout',
       {
         amount: parseInt(amount),
-        number: phone,
+        number: formattedPhone,
       },
       {
         headers: {
@@ -229,7 +237,6 @@ router.post('/cashout', verifyToken, async (req, res) => {
 
     const transaction = response.data;
 
-    // Deduct from wallet
     await supabase
       .from('wallets')
       .update({
@@ -238,7 +245,6 @@ router.post('/cashout', verifyToken, async (req, res) => {
       })
       .eq('user_id', req.user.userId);
 
-    // Save transaction
     await supabase.from('transactions').insert({
       wallet_id: wallet.id,
       type: 'out',
