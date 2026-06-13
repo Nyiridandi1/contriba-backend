@@ -21,10 +21,17 @@ const verifyToken = (req, res, next) => {
 // ── POST /api/events ── Create Event
 router.post('/', verifyToken, async (req, res) => {
   try {
-    const { title, type, date, location, description, goal_amount } = req.body;
+    const { 
+      title, type, date, location, description, 
+      goal_amount, owner_phone, owner_payment_method 
+    } = req.body;
 
     if (!title) {
       return res.status(400).json({ success: false, message: 'Event title is required' });
+    }
+
+    if (!owner_phone) {
+      return res.status(400).json({ success: false, message: 'Owner phone number is required' });
     }
 
     // Generate share link
@@ -43,6 +50,8 @@ router.post('/', verifyToken, async (req, res) => {
         goal_amount: goal_amount || 0,
         share_link: shareLink,
         status: 'active',
+        owner_phone: owner_phone || null,
+        owner_payment_method: owner_payment_method || 'mtn',
       })
       .select()
       .single();
@@ -120,15 +129,28 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ success: false, message: 'Event not found' });
     }
 
-    // Get total contributions
+    // Get contributions — public info only
     const { data: contributions } = await supabase
       .from('contributions')
-      .select('amount')
+      .select('id, contributor_name, amount, message, is_anonymous, created_at, status')
       .eq('event_id', id)
-      .eq('status', 'success');
+      .order('created_at', { ascending: false });
 
-    const totalRaised = contributions?.reduce((sum, c) => sum + c.amount, 0) || 0;
-    const totalContributors = contributions?.length || 0;
+    const successfulContributions = contributions?.filter(c => c.status === 'success') || [];
+    const totalRaised = successfulContributions.reduce((sum, c) => sum + c.amount, 0);
+    const totalContributors = successfulContributions.length;
+
+    // Public feed — hide amounts and names for anonymous
+    const publicFeed = contributions?.map(c => ({
+      id: c.id,
+      name: c.is_anonymous ? 'Anonymous 🙈' : c.contributor_name,
+      message: c.message,
+      is_anonymous: c.is_anonymous,
+      created_at: c.created_at,
+      status: c.status,
+      // Only show amount if not anonymous
+      amount: c.is_anonymous ? null : c.amount,
+    })) || [];
 
     res.json({
       success: true,
@@ -137,6 +159,7 @@ router.get('/:id', async (req, res) => {
         total_raised: totalRaised,
         total_contributors: totalContributors,
       },
+      public_feed: publicFeed,
     });
 
   } catch (err) {
@@ -145,15 +168,55 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// ── GET /api/events/:id/contributions ── Get Full Contributions (Owner only)
+router.get('/:id/contributions', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Check ownership
+    const { data: event } = await supabase
+      .from('events')
+      .select('owner_id')
+      .eq('id', id)
+      .single();
+
+    if (!event || event.owner_id !== req.user.userId) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+
+    // Get ALL contribution details for owner
+    const { data: contributions, error } = await supabase
+      .from('contributions')
+      .select('*')
+      .eq('event_id', id)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const totalRaised = contributions?.filter(c => c.status === 'success').reduce((sum, c) => sum + c.amount, 0) || 0;
+
+    res.json({
+      success: true,
+      contributions,
+      total_raised: totalRaised,
+      total_contributors: contributions?.filter(c => c.status === 'success').length || 0,
+    });
+
+  } catch (err) {
+    console.error('Get contributions error:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to get contributions' });
+  }
+});
+
 // ── PUT /api/events/:id ── Update Event
 router.put('/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, type, date, location, description, goal_amount } = req.body;
+    const { title, type, date, location, description, goal_amount, owner_phone, owner_payment_method } = req.body;
 
     const { data: event, error } = await supabase
       .from('events')
-      .update({ title, type, date, location, description, goal_amount })
+      .update({ title, type, date, location, description, goal_amount, owner_phone, owner_payment_method })
       .eq('id', id)
       .eq('owner_id', req.user.userId)
       .select()
