@@ -17,6 +17,7 @@ app.use('/api/contributions', require('./routes/contributions'));
 app.use('/api/wallet', require('./routes/wallet'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/dashboard', require('./routes/dashboard'));
+app.use('/api/payments', require('./routes/payments'));
 
 // ── TEST ROUTE ──
 app.get('/', (req, res) => {
@@ -35,6 +36,9 @@ app.get('/', (req, res) => {
       'POST /api/wallet/withdraw',
       'GET  /api/notifications',
       'GET  /api/dashboard',
+      'POST /api/payments/cashin',
+      'GET  /api/payments/status/:ref',
+      'POST /api/payments/cashout',
     ]
   });
 });
