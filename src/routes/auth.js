@@ -77,6 +77,33 @@ async function sendWelcomeEmail(email, name) {
   }
 }
 
+// ── Send Push Notification ──
+async function sendPushNotification(pushToken, title, body, data = {}) {
+  try {
+    const message = {
+      to: pushToken,
+      sound: 'default',
+      title,
+      body,
+      data,
+    };
+    const response = await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(message),
+    });
+    const result = await response.json();
+    console.log('Push notification sent:', result);
+    return true;
+  } catch (err) {
+    console.error('Push notification error:', err.message);
+    return false;
+  }
+}
+
 // ── MIDDLEWARE: Verify JWT Token ──
 const verifyToken = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
@@ -96,79 +123,44 @@ router.post('/send-otp', async (req, res) => {
     const { phone, email, name, is_login } = req.body;
     if (!phone) return res.status(400).json({ success: false, message: 'Phone number is required' });
 
-    // Check if user exists
     const { data: users } = await supabase.from('users').select('*').eq('phone', phone).limit(1);
     const existingUser = users && users.length > 0 ? users[0] : null;
 
-    // ── LOGIN: existing user ──
     if (existingUser) {
-
-      // Block if signing up with existing number
       if (!is_login && email) {
-        return res.status(400).json({
-          success: false,
-          message: 'This number already has an account. Please login instead!',
-        });
+        return res.status(400).json({ success: false, message: 'This number already has an account. Please login instead!' });
       }
-
-      // If email provided on login, verify it matches
       if (email && existingUser.email && existingUser.email.toLowerCase() !== email.toLowerCase()) {
-        return res.status(400).json({
-          success: false,
-          message: 'Credentials mismatch! The email does not match this phone number.',
-        });
+        return res.status(400).json({ success: false, message: 'Credentials mismatch! The email does not match this phone number.' });
       }
 
       const otp = generateOTP();
       await supabase.from('otps').delete().eq('phone', phone);
-      await supabase.from('otps').insert({
-        phone, otp_code: otp, expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      });
-
+      await supabase.from('otps').insert({ phone, otp_code: otp, expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString() });
       console.log(`OTP for ${phone}: ${otp}`);
 
-      // Send to their saved email automatically
       const emailToUse = existingUser.email || email;
       if (emailToUse) {
         await sendOTPEmail(emailToUse, otp, existingUser.name);
-        return res.json({
-          success: true,
-          message: `OTP sent to your registered email`,
-          email_sent: true,
-          email_hint: emailToUse.replace(/(.{2}).*(@.*)/, '$1***$2'),
-        });
+        return res.json({ success: true, message: `OTP sent to your registered email`, email_sent: true, email_hint: emailToUse.replace(/(.{2}).*(@.*)/, '$1***$2') });
       }
-
       return res.json({ success: true, message: 'OTP sent successfully', otp });
     }
 
-    // ── SIGN UP: new user ──
-
-    // Block unregistered numbers from login screen
     if (is_login) {
-      return res.status(400).json({
-        success: false,
-        message: 'This number is not registered. Please sign up first!',
-      });
+      return res.status(400).json({ success: false, message: 'This number is not registered. Please sign up first!' });
     }
 
-    // Check if email already used by another account
     if (email) {
       const { data: emailUsers } = await supabase.from('users').select('*').eq('email', email).limit(1);
       if (emailUsers && emailUsers.length > 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'This email is already linked to another account. Please use a different email.',
-        });
+        return res.status(400).json({ success: false, message: 'This email is already linked to another account. Please use a different email.' });
       }
     }
 
     const otp = generateOTP();
     await supabase.from('otps').delete().eq('phone', phone);
-    await supabase.from('otps').insert({
-      phone, otp_code: otp, expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-    });
-
+    await supabase.from('otps').insert({ phone, otp_code: otp, expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString() });
     console.log(`OTP for ${phone}: ${otp}`);
 
     if (email) {
@@ -188,7 +180,6 @@ router.post('/send-otp', async (req, res) => {
 router.post('/verify-otp', async (req, res) => {
   try {
     const { phone, otp, name, email } = req.body;
-
     if (!phone || !otp) return res.status(400).json({ success: false, message: 'Phone and OTP are required' });
 
     const { data: otpData, error } = await supabase
@@ -217,22 +208,11 @@ router.post('/verify-otp', async (req, res) => {
       user = { ...user, name, email };
     }
 
-    if (isNewUser && email) {
-      await sendWelcomeEmail(email, name);
-    }
+    if (isNewUser && email) await sendWelcomeEmail(email, name);
 
-    const token = jwt.sign(
-      { userId: user.id, phone: user.phone },
-      process.env.JWT_SECRET,
-      { expiresIn: '30d' }
-    );
+    const token = jwt.sign({ userId: user.id, phone: user.phone }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
-    res.json({
-      success: true,
-      message: 'Login successful',
-      token,
-      user: { id: user.id, phone: user.phone, name: user.name, email: user.email, avatar_url: user.avatar_url },
-    });
+    res.json({ success: true, message: 'Login successful', token, user: { id: user.id, phone: user.phone, name: user.name, email: user.email, avatar_url: user.avatar_url } });
 
   } catch (err) {
     console.error('Verify OTP error:', err.message);
@@ -244,7 +224,6 @@ router.post('/verify-otp', async (req, res) => {
 router.post('/google', async (req, res) => {
   try {
     const { email, name, photo, google_id } = req.body;
-
     if (!email || !google_id) return res.status(400).json({ success: false, message: 'Email and Google ID are required' });
 
     let { data: users } = await supabase.from('users').select('*').eq('email', email).limit(1);
@@ -265,18 +244,9 @@ router.post('/google', async (req, res) => {
 
     if (isNewUser) await sendWelcomeEmail(email, name);
 
-    const token = jwt.sign(
-      { userId: user.id, email: user.email },
-      process.env.JWT_SECRET,
-      { expiresIn: '30d' }
-    );
+    const token = jwt.sign({ userId: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
-    res.json({
-      success: true,
-      message: 'Google login successful',
-      token,
-      user: { id: user.id, phone: user.phone, name: user.name, email: user.email, avatar_url: user.avatar_url },
-    });
+    res.json({ success: true, message: 'Google login successful', token, user: { id: user.id, phone: user.phone, name: user.name, email: user.email, avatar_url: user.avatar_url } });
 
   } catch (err) {
     console.error('Google auth error:', err.message);
@@ -296,4 +266,38 @@ router.post('/update-profile', verifyToken, async (req, res) => {
   }
 });
 
+// POST /api/auth/update-push-token
+router.post('/update-push-token', verifyToken, async (req, res) => {
+  try {
+    const { push_token } = req.body;
+    await supabase.from('users').update({ push_token }).eq('id', req.user.userId);
+    console.log(`Push token saved for user ${req.user.userId}`);
+    res.json({ success: true, message: 'Push token saved' });
+  } catch (err) {
+    console.error('Push token error:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to save push token' });
+  }
+});
+
+// POST /api/auth/send-push (internal use - send notification to a user)
+router.post('/send-push', async (req, res) => {
+  try {
+    const { user_id, title, body, data } = req.body;
+    const { data: users } = await supabase.from('users').select('push_token').eq('id', user_id).limit(1);
+    const user = users && users.length > 0 ? users[0] : null;
+
+    if (!user?.push_token) {
+      return res.json({ success: false, message: 'No push token found for user' });
+    }
+
+    await sendPushNotification(user.push_token, title, body, data);
+    res.json({ success: true, message: 'Notification sent!' });
+
+  } catch (err) {
+    console.error('Send push error:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to send notification' });
+  }
+});
+
 module.exports = router;
+module.exports.sendPushNotification = sendPushNotification;
