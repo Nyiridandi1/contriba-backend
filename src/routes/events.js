@@ -5,9 +5,7 @@ const supabase = require('../config/database');
 // ── MIDDLEWARE: Verify JWT Token ──
 const verifyToken = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
-  if (!token) {
-    return res.status(401).json({ success: false, message: 'No token provided' });
-  }
+  if (!token) return res.status(401).json({ success: false, message: 'No token provided' });
   try {
     const jwt = require('jsonwebtoken');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -21,23 +19,17 @@ const verifyToken = (req, res, next) => {
 // ── POST /api/events ── Create Event
 router.post('/', verifyToken, async (req, res) => {
   try {
-    const { 
-      title, type, date, location, description, 
-      goal_amount, owner_phone, owner_payment_method 
+    const {
+      title, type, date, location, description,
+      goal_amount, owner_phone, owner_payment_method,
+      cover_image, photo2_url,
     } = req.body;
 
-    if (!title) {
-      return res.status(400).json({ success: false, message: 'Event title is required' });
-    }
+    if (!title) return res.status(400).json({ success: false, message: 'Event title is required' });
+    if (!owner_phone) return res.status(400).json({ success: false, message: 'Owner phone number is required' });
 
-    if (!owner_phone) {
-      return res.status(400).json({ success: false, message: 'Owner phone number is required' });
-    }
-
-    // Generate share link
     const shareLink = `https://contriba.rw/e/${title.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
 
-    // Create event
     const { data: event, error } = await supabase
       .from('events')
       .insert({
@@ -52,17 +44,15 @@ router.post('/', verifyToken, async (req, res) => {
         status: 'active',
         owner_phone: owner_phone || null,
         owner_payment_method: owner_payment_method || 'mtn',
+        cover_image: cover_image || null,
+        photo2_url: photo2_url || null,
       })
       .select()
       .single();
 
     if (error) throw error;
 
-    res.json({
-      success: true,
-      message: 'Event created successfully',
-      event,
-    });
+    res.json({ success: true, message: 'Event created successfully', event });
 
   } catch (err) {
     console.error('Create event error:', err.message);
@@ -80,11 +70,7 @@ router.get('/', async (req, res) => {
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-
-    res.json({
-      success: true,
-      events,
-    });
+    res.json({ success: true, events });
 
   } catch (err) {
     console.error('Get events error:', err.message);
@@ -102,11 +88,7 @@ router.get('/my-events', verifyToken, async (req, res) => {
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-
-    res.json({
-      success: true,
-      events,
-    });
+    res.json({ success: true, events });
 
   } catch (err) {
     console.error('Get my events error:', err.message);
@@ -120,16 +102,10 @@ router.get('/:id', async (req, res) => {
     const { id } = req.params;
 
     const { data: event, error } = await supabase
-      .from('events')
-      .select('*')
-      .eq('id', id)
-      .single();
+      .from('events').select('*').eq('id', id).single();
 
-    if (error || !event) {
-      return res.status(404).json({ success: false, message: 'Event not found' });
-    }
+    if (error || !event) return res.status(404).json({ success: false, message: 'Event not found' });
 
-    // Get contributions — public info only
     const { data: contributions } = await supabase
       .from('contributions')
       .select('id, contributor_name, amount, message, is_anonymous, created_at, status')
@@ -140,7 +116,6 @@ router.get('/:id', async (req, res) => {
     const totalRaised = successfulContributions.reduce((sum, c) => sum + c.amount, 0);
     const totalContributors = successfulContributions.length;
 
-    // Public feed — hide amounts and names for anonymous
     const publicFeed = contributions?.map(c => ({
       id: c.id,
       name: c.is_anonymous ? 'Anonymous 🙈' : c.contributor_name,
@@ -148,17 +123,12 @@ router.get('/:id', async (req, res) => {
       is_anonymous: c.is_anonymous,
       created_at: c.created_at,
       status: c.status,
-      // Only show amount if not anonymous
       amount: c.is_anonymous ? null : c.amount,
     })) || [];
 
     res.json({
       success: true,
-      event: {
-        ...event,
-        total_raised: totalRaised,
-        total_contributors: totalContributors,
-      },
+      event: { ...event, total_raised: totalRaised, total_contributors: totalContributors },
       public_feed: publicFeed,
     });
 
@@ -173,23 +143,13 @@ router.get('/:id/contributions', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Check ownership
-    const { data: event } = await supabase
-      .from('events')
-      .select('owner_id')
-      .eq('id', id)
-      .single();
-
+    const { data: event } = await supabase.from('events').select('owner_id').eq('id', id).single();
     if (!event || event.owner_id !== req.user.userId) {
       return res.status(403).json({ success: false, message: 'Access denied' });
     }
 
-    // Get ALL contribution details for owner
     const { data: contributions, error } = await supabase
-      .from('contributions')
-      .select('*')
-      .eq('event_id', id)
-      .order('created_at', { ascending: false });
+      .from('contributions').select('*').eq('event_id', id).order('created_at', { ascending: false });
 
     if (error) throw error;
 
@@ -212,23 +172,18 @@ router.get('/:id/contributions', verifyToken, async (req, res) => {
 router.put('/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, type, date, location, description, goal_amount, owner_phone, owner_payment_method } = req.body;
+    const { title, type, date, location, description, goal_amount, owner_phone, owner_payment_method, cover_image, photo2_url } = req.body;
 
     const { data: event, error } = await supabase
       .from('events')
-      .update({ title, type, date, location, description, goal_amount, owner_phone, owner_payment_method })
+      .update({ title, type, date, location, description, goal_amount, owner_phone, owner_payment_method, cover_image, photo2_url })
       .eq('id', id)
       .eq('owner_id', req.user.userId)
       .select()
       .single();
 
     if (error) throw error;
-
-    res.json({
-      success: true,
-      message: 'Event updated successfully',
-      event,
-    });
+    res.json({ success: true, message: 'Event updated successfully', event });
 
   } catch (err) {
     console.error('Update event error:', err.message);
@@ -240,20 +195,10 @@ router.put('/:id', verifyToken, async (req, res) => {
 router.delete('/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-
     const { error } = await supabase
-      .from('events')
-      .update({ status: 'deleted' })
-      .eq('id', id)
-      .eq('owner_id', req.user.userId);
-
+      .from('events').update({ status: 'deleted' }).eq('id', id).eq('owner_id', req.user.userId);
     if (error) throw error;
-
-    res.json({
-      success: true,
-      message: 'Event deleted successfully',
-    });
-
+    res.json({ success: true, message: 'Event deleted successfully' });
   } catch (err) {
     console.error('Delete event error:', err.message);
     res.status(500).json({ success: false, message: 'Failed to delete event' });
