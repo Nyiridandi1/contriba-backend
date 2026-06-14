@@ -2,9 +2,93 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/database');
 const jwt = require('jsonwebtoken');
+const { Resend } = require('resend');
+
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+// ── Send OTP Email ──
+async function sendOTPEmail(email, otp, name) {
+  try {
+    await resend.emails.send({
+      from: 'Contriba <onboarding@resend.dev>',
+      to: email,
+      subject: `${otp} is your Contriba verification code`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <div style="background: #7A001F; padding: 20px; border-radius: 12px; text-align: center; margin-bottom: 24px;">
+            <h1 style="color: white; margin: 0; font-size: 28px;">Contriba</h1>
+            <p style="color: rgba(255,255,255,0.8); margin: 8px 0 0 0;">Digital Event Contributions 🇷🇼</p>
+          </div>
+          
+          <h2 style="color: #1A1A1A;">Hello ${name || 'there'} 👋</h2>
+          <p style="color: #666; font-size: 16px;">Your verification code is:</p>
+          
+          <div style="background: #F9EEF1; border: 2px solid #7A001F; border-radius: 12px; padding: 24px; text-align: center; margin: 24px 0;">
+            <h1 style="color: #7A001F; font-size: 48px; letter-spacing: 12px; margin: 0;">${otp}</h1>
+          </div>
+          
+          <p style="color: #666; font-size: 14px;">This code expires in <strong>60 minutes</strong>.</p>
+          <p style="color: #666; font-size: 14px;">If you didn't request this code, please ignore this email.</p>
+          
+          <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;">
+          <p style="color: #999; font-size: 12px; text-align: center;">
+            Contriba - Digital Event Contributions Platform 🇷🇼<br>
+            Kigali, Rwanda
+          </p>
+        </div>
+      `,
+    });
+    console.log(`OTP email sent to ${email}`);
+    return true;
+  } catch (err) {
+    console.error('Email send error:', err.message);
+    return false;
+  }
+}
+
+// ── Send Welcome Email ──
+async function sendWelcomeEmail(email, name) {
+  try {
+    await resend.emails.send({
+      from: 'Contriba <onboarding@resend.dev>',
+      to: email,
+      subject: `Welcome to Contriba ${name ? ', ' + name : ''}! 🎉`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <div style="background: #7A001F; padding: 20px; border-radius: 12px; text-align: center; margin-bottom: 24px;">
+            <h1 style="color: white; margin: 0; font-size: 28px;">Contriba</h1>
+            <p style="color: rgba(255,255,255,0.8); margin: 8px 0 0 0;">Digital Event Contributions 🇷🇼</p>
+          </div>
+          
+          <h2 style="color: #1A1A1A;">Welcome ${name || 'to Contriba'}! 🎉</h2>
+          <p style="color: #666; font-size: 16px;">You're now part of the Contriba family!</p>
+          
+          <div style="background: #F9EEF1; border-radius: 12px; padding: 20px; margin: 24px 0;">
+            <h3 style="color: #7A001F; margin-top: 0;">What you can do with Contriba:</h3>
+            <p style="color: #666; margin: 8px 0;">🎊 Create events (Weddings, Birthdays, Introductions)</p>
+            <p style="color: #666; margin: 8px 0;">💰 Receive contributions via MTN MoMo & Airtel</p>
+            <p style="color: #666; margin: 8px 0;">🔴 Live feed of contributions</p>
+            <p style="color: #666; margin: 8px 0;">🙈 Anonymous contribution option</p>
+          </div>
+          
+          <p style="color: #666; font-size: 14px;">Start by creating your first event!</p>
+          
+          <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;">
+          <p style="color: #999; font-size: 12px; text-align: center;">
+            Contriba - Digital Event Contributions Platform 🇷🇼<br>
+            Kigali, Rwanda
+          </p>
+        </div>
+      `,
+    });
+    console.log(`Welcome email sent to ${email}`);
+  } catch (err) {
+    console.error('Welcome email error:', err.message);
+  }
 }
 
 // ── MIDDLEWARE: Verify JWT Token ──
@@ -23,7 +107,7 @@ const verifyToken = (req, res, next) => {
 // POST /api/auth/send-otp
 router.post('/send-otp', async (req, res) => {
   try {
-    const { phone } = req.body;
+    const { phone, email, name } = req.body;
     if (!phone) return res.status(400).json({ success: false, message: 'Phone number is required' });
 
     const otp = generateOTP();
@@ -36,7 +120,14 @@ router.post('/send-otp', async (req, res) => {
 
     if (error) throw error;
     console.log(`OTP for ${phone}: ${otp}`);
-    res.json({ success: true, message: 'OTP sent successfully', otp });
+
+    // Send OTP via email if provided
+    if (email) {
+      await sendOTPEmail(email, otp, name);
+      res.json({ success: true, message: `OTP sent to ${email}`, email_sent: true });
+    } else {
+      res.json({ success: true, message: 'OTP sent successfully', otp });
+    }
 
   } catch (err) {
     console.error('Send OTP error:', err.message);
@@ -64,6 +155,7 @@ router.post('/verify-otp', async (req, res) => {
 
     let { data: users } = await supabase.from('users').select('*').eq('phone', phone).limit(1);
     let user = users && users.length > 0 ? users[0] : null;
+    let isNewUser = false;
 
     if (!user) {
       const { data: newUsers, error: createError } = await supabase
@@ -74,10 +166,15 @@ router.post('/verify-otp', async (req, res) => {
       if (createError) throw createError;
       user = newUsers[0];
       await supabase.from('wallets').insert({ user_id: user.id });
+      isNewUser = true;
     } else if (name && !user.name) {
-      // Update name if not set
       await supabase.from('users').update({ name, email }).eq('id', user.id);
       user = { ...user, name, email };
+    }
+
+    // Send welcome email to new users
+    if (isNewUser && email) {
+      await sendWelcomeEmail(email, name);
     }
 
     const token = jwt.sign(
@@ -108,6 +205,7 @@ router.post('/google', async (req, res) => {
 
     let { data: users } = await supabase.from('users').select('*').eq('email', email).limit(1);
     let user = users && users.length > 0 ? users[0] : null;
+    let isNewUser = false;
 
     if (!user) {
       const { data: newUsers, error: createError } = await supabase
@@ -115,10 +213,16 @@ router.post('/google', async (req, res) => {
       if (createError) throw createError;
       user = newUsers[0];
       await supabase.from('wallets').insert({ user_id: user.id });
+      isNewUser = true;
       console.log(`New Google user created: ${email}`);
     } else {
       await supabase.from('users').update({ name, avatar_url: photo, google_id }).eq('id', user.id);
       user = { ...user, name, avatar_url: photo };
+    }
+
+    // Send welcome email to new Google users
+    if (isNewUser) {
+      await sendWelcomeEmail(email, name);
     }
 
     const token = jwt.sign(
@@ -144,11 +248,8 @@ router.post('/google', async (req, res) => {
 router.post('/update-profile', verifyToken, async (req, res) => {
   try {
     const { name, email } = req.body;
-
     await supabase.from('users').update({ name, email }).eq('id', req.user.userId);
-
     res.json({ success: true, message: 'Profile updated successfully' });
-
   } catch (err) {
     console.error('Update profile error:', err.message);
     res.status(500).json({ success: false, message: 'Failed to update profile' });
