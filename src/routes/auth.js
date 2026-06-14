@@ -93,7 +93,7 @@ const verifyToken = (req, res, next) => {
 // POST /api/auth/send-otp
 router.post('/send-otp', async (req, res) => {
   try {
-    const { phone, email, name } = req.body;
+    const { phone, email, name, is_login } = req.body;
     if (!phone) return res.status(400).json({ success: false, message: 'Phone number is required' });
 
     // Check if user exists
@@ -102,7 +102,16 @@ router.post('/send-otp', async (req, res) => {
 
     // ── LOGIN: existing user ──
     if (existingUser) {
-      // If email provided, verify it matches
+
+      // Block if signing up with existing number
+      if (!is_login && email) {
+        return res.status(400).json({
+          success: false,
+          message: 'This number already has an account. Please login instead!',
+        });
+      }
+
+      // If email provided on login, verify it matches
       if (email && existingUser.email && existingUser.email.toLowerCase() !== email.toLowerCase()) {
         return res.status(400).json({
           success: false,
@@ -134,6 +143,15 @@ router.post('/send-otp', async (req, res) => {
     }
 
     // ── SIGN UP: new user ──
+
+    // Block unregistered numbers from login screen
+    if (is_login) {
+      return res.status(400).json({
+        success: false,
+        message: 'This number is not registered. Please sign up first!',
+      });
+    }
+
     // Check if email already used by another account
     if (email) {
       const { data: emailUsers } = await supabase.from('users').select('*').eq('email', email).limit(1);
