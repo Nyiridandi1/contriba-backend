@@ -35,12 +35,35 @@ async function getPaypackToken() {
 // ── Format phone for Paypack ──
 function formatPhone(phone) {
   if (!phone) return phone;
-  // Remove spaces and dashes
   phone = phone.replace(/[\s-]/g, '');
-  // Keep as 07XXXXXXXX format for Paypack sandbox
   if (phone.startsWith('+250')) return '0' + phone.slice(4);
   if (phone.startsWith('250')) return '0' + phone.slice(3);
   return phone;
+}
+
+// ✅ Send Push Notification via Expo
+async function sendPushNotification(pushToken, title, body, data = {}) {
+  try {
+    if (!pushToken) return;
+    await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        to: pushToken,
+        sound: 'default',
+        title,
+        body,
+        data,
+        priority: 'high',
+      }),
+    });
+    console.log('Push notification sent to:', pushToken);
+  } catch (err) {
+    console.error('Push notification error:', err.message);
+  }
 }
 
 // ── POST /api/payments/cashin ── Request Payment from User
@@ -58,10 +81,8 @@ router.post('/cashin', async (req, res) => {
     const formattedPhone = formatPhone(phone);
     console.log(`Cashin: amount=${amount}, phone=${formattedPhone}`);
 
-    // Get Paypack token
     const token = await getPaypackToken();
 
-    // Initiate cashin
     const response = await axios.post(
       'https://payments.paypack.rw/api/transactions/cashin',
       {
@@ -79,7 +100,6 @@ router.post('/cashin', async (req, res) => {
 
     const transaction = response.data;
 
-    // Update contribution with transaction ref
     if (contribution_id) {
       await supabase
         .from('contributions')
@@ -124,7 +144,6 @@ router.get('/status/:ref', async (req, res) => {
 
     const transaction = response.data;
 
-    // If payment successful → update contribution
     if (transaction.status === 'successful') {
       const { data: contribution } = await supabase
         .from('contributions')
@@ -133,6 +152,7 @@ router.get('/status/:ref', async (req, res) => {
         .single();
 
       if (contribution && contribution.status !== 'success') {
+        // ✅ Update contribution status
         await supabase
           .from('contributions')
           .update({ status: 'success' })
@@ -140,16 +160,18 @@ router.get('/status/:ref', async (req, res) => {
 
         const { data: event } = await supabase
           .from('events')
-          .select('total_raised, owner_id')
+          .select('*, title')
           .eq('id', contribution.event_id)
           .single();
 
         if (event) {
+          // ✅ Update event total raised
           await supabase
             .from('events')
             .update({ total_raised: (event.total_raised || 0) + contribution.amount })
             .eq('id', contribution.event_id);
 
+          // ✅ Update wallet balance
           const { data: wallet } = await supabase
             .from('wallets')
             .select('*')
@@ -166,12 +188,66 @@ router.get('/status/:ref', async (req, res) => {
               .eq('user_id', event.owner_id);
           }
 
+          // ✅ Save notification to database
           await supabase.from('notifications').insert({
             user_id: event.owner_id,
-            title: 'New Contribution Received! 🎉',
-            message: `${contribution.contributor_name} contributed RWF ${contribution.amount.toLocaleString()}`,
+            title: '💰 New Contribution Received!',
+            message: `${contribution.contributor_name || 'Someone'} contributed RWF ${contribution.amount.toLocaleString()} to "${event.title}"`,
             type: 'contribution',
           });
+
+          // ✅ Send REAL push notification to event owner
+          const { data: owner } = await supabase
+            .from('users')
+            .select('push_token, name')
+            .eq('id', event.owner_id)
+            .single();
+
+          if (owner?.push_token) {
+            await sendPushNotification(
+              owner.push_token,
+              '💰 New Contribution!',
+              `${contribution.contributor_name || 'Someone'} just contributed RWF ${contribution.amount.toLocaleString()} to "${event.title}"! 🎉`,
+              {
+                type: 'contribution',
+                event_id: contribution.event_id,
+              }
+            );
+          }
+
+          // ✅ Check if goal reached and notify
+          const newTotal = (event.total_raised || 0) + contribution.amount;
+          const goalPercent = event.goal_amount > 0
+            ? Math.round((newTotal / event.goal_amount) * 100) : 0;
+
+          if (goalPercent >= 100 && event.total_raised < event.goal_amount) {
+            // Goal just reached!
+            await supabase.from('notifications').insert({
+              user_id: event.owner_id,
+              title: '🎯 Goal Reached!',
+              message: `Congratulations! Your event "${event.title}" has reached its goal! 🎉`,
+              type: 'goal_reached',
+            });
+
+            if (owner?.push_token) {
+              await sendPushNotification(
+                owner.push_token,
+                '🎯 Goal Reached!',
+                `Congratulations! "${event.title}" has reached its fundraising goal! 🎉`,
+                { type: 'goal_reached', event_id: event.id }
+              );
+            }
+          } else if (goalPercent >= 80 && goalPercent < 100) {
+            // 80% milestone
+            if (owner?.push_token) {
+              await sendPushNotification(
+                owner.push_token,
+                '🔥 Almost There!',
+                `"${event.title}" is ${goalPercent}% funded! Keep sharing! 💪`,
+                { type: 'milestone', event_id: event.id }
+              );
+            }
+          }
         }
       }
     }
@@ -252,6 +328,22 @@ router.post('/cashout', verifyToken, async (req, res) => {
       reference: transaction.ref,
       status: 'pending',
     });
+
+    // ✅ Notify user about withdrawal
+    const { data: user } = await supabase
+      .from('users')
+      .select('push_token')
+      .eq('id', req.user.userId)
+      .single();
+
+    if (user?.push_token) {
+      await sendPushNotification(
+        user.push_token,
+        '💸 Withdrawal Initiated!',
+        `RWF ${parseInt(amount).toLocaleString()} will be sent to your phone shortly!`,
+        { type: 'withdrawal' }
+      );
+    }
 
     res.json({
       success: true,
