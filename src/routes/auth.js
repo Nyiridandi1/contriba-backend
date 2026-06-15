@@ -266,6 +266,28 @@ router.post('/update-profile', verifyToken, async (req, res) => {
   }
 });
 
+// ✅ NEW: POST /api/auth/update-avatar
+router.post('/update-avatar', verifyToken, async (req, res) => {
+  try {
+    const { avatar_url } = req.body;
+    await supabase
+      .from('users')
+      .update({ avatar_url })
+      .eq('id', req.user.userId);
+
+    const { data: user } = await supabase
+      .from('users')
+      .select('id, phone, name, email, avatar_url')
+      .eq('id', req.user.userId)
+      .single();
+
+    res.json({ success: true, message: 'Avatar updated!', user });
+  } catch (err) {
+    console.error('Update avatar error:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to update avatar' });
+  }
+});
+
 // POST /api/auth/update-push-token
 router.post('/update-push-token', verifyToken, async (req, res) => {
   try {
@@ -279,7 +301,7 @@ router.post('/update-push-token', verifyToken, async (req, res) => {
   }
 });
 
-// POST /api/auth/send-push (internal use - send notification to a user)
+// POST /api/auth/send-push
 router.post('/send-push', async (req, res) => {
   try {
     const { user_id, title, body, data } = req.body;
