@@ -22,7 +22,7 @@ router.post('/', verifyToken, async (req, res) => {
     const {
       title, type, date, location, description,
       goal_amount, owner_phone, owner_payment_method,
-      cover_image, photo2_url,
+      cover_image, photo2_url, photo3_url, photo4_url,
     } = req.body;
 
     if (!title) return res.status(400).json({ success: false, message: 'Event title is required' });
@@ -46,6 +46,8 @@ router.post('/', verifyToken, async (req, res) => {
         owner_payment_method: owner_payment_method || 'mtn',
         cover_image: cover_image || null,
         photo2_url: photo2_url || null,
+        photo3_url: photo3_url || null,
+        photo4_url: photo4_url || null,
       })
       .select()
       .single();
@@ -172,11 +174,19 @@ router.get('/:id/contributions', verifyToken, async (req, res) => {
 router.put('/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, type, date, location, description, goal_amount, owner_phone, owner_payment_method, cover_image, photo2_url } = req.body;
+    const {
+      title, type, date, location, description,
+      goal_amount, owner_phone, owner_payment_method,
+      cover_image, photo2_url, photo3_url, photo4_url,
+    } = req.body;
 
     const { data: event, error } = await supabase
       .from('events')
-      .update({ title, type, date, location, description, goal_amount, owner_phone, owner_payment_method, cover_image, photo2_url })
+      .update({
+        title, type, date, location, description,
+        goal_amount, owner_phone, owner_payment_method,
+        cover_image, photo2_url, photo3_url, photo4_url,
+      })
       .eq('id', id)
       .eq('owner_id', req.user.userId)
       .select()
