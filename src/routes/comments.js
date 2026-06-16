@@ -68,11 +68,13 @@ router.post('/:event_id', async (req, res) => {
       .single();
 
     if (event) {
+      // ✅ Save event_id in notification
       await supabase.from('notifications').insert({
         user_id: event.owner_id,
         title: '💬 New Comment!',
         message: `${is_anonymous ? 'Someone' : name} commented on "${event.title}"`,
         type: 'comment',
+        event_id: event_id,
       });
 
       // Send push notification
