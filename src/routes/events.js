@@ -23,6 +23,7 @@ router.post('/', verifyToken, async (req, res) => {
       title, type, date, location, description,
       goal_amount, owner_phone, owner_payment_method,
       cover_image, photo2_url, photo3_url, photo4_url,
+      is_private, // ✅ new field
     } = req.body;
 
     if (!title) return res.status(400).json({ success: false, message: 'Event title is required' });
@@ -44,6 +45,7 @@ router.post('/', verifyToken, async (req, res) => {
         photo2_url: photo2_url || null,
         photo3_url: photo3_url || null,
         photo4_url: photo4_url || null,
+        is_private: is_private || false, // ✅ save privacy setting
       })
       .select()
       .single();
@@ -57,13 +59,14 @@ router.post('/', verifyToken, async (req, res) => {
   }
 });
 
-// ── GET /api/events ── Get All Events
+// ── GET /api/events ── Get All Public Events only
 router.get('/', async (req, res) => {
   try {
     const { data: events, error } = await supabase
       .from('events')
       .select('*')
       .eq('status', 'active')
+      .eq('is_private', false) // ✅ only show public events
       .order('created_at', { ascending: false });
 
     if (error) throw error;
@@ -75,7 +78,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// ── GET /api/events/my-events ── Get Owner's Events
+// ── GET /api/events/my-events ── Get Owner's Events (all — public + private)
 router.get('/my-events', verifyToken, async (req, res) => {
   try {
     const { data: events, error } = await supabase
@@ -93,7 +96,7 @@ router.get('/my-events', verifyToken, async (req, res) => {
   }
 });
 
-// ── GET /api/events/:id ── Get Single Event
+// ── GET /api/events/:id ── Get Single Event (public or private via link)
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -103,7 +106,7 @@ router.get('/:id', async (req, res) => {
 
     if (error || !event) return res.status(404).json({ success: false, message: 'Event not found' });
 
-    // ✅ Fetch creator profile (name, phone, avatar only — no email for privacy)
+    // ✅ Fetch creator profile
     const { data: creator } = await supabase
       .from('users')
       .select('id, name, phone, avatar_url')
@@ -136,7 +139,7 @@ router.get('/:id', async (req, res) => {
         ...event,
         total_raised: totalRaised,
         total_contributors: totalContributors,
-        creator: creator || null, // ✅ Include creator info
+        creator: creator || null,
       },
       public_feed: publicFeed,
     });
@@ -185,6 +188,7 @@ router.put('/:id', verifyToken, async (req, res) => {
       title, type, date, location, description,
       goal_amount, owner_phone, owner_payment_method,
       cover_image, photo2_url, photo3_url, photo4_url,
+      is_private, // ✅ allow updating privacy
     } = req.body;
 
     const { data: event, error } = await supabase
@@ -193,6 +197,7 @@ router.put('/:id', verifyToken, async (req, res) => {
         title, type, date, location, description,
         goal_amount, owner_phone, owner_payment_method,
         cover_image, photo2_url, photo3_url, photo4_url,
+        is_private: is_private || false, // ✅ update privacy
       })
       .eq('id', id)
       .eq('owner_id', req.user.userId)
