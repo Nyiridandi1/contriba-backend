@@ -34,11 +34,7 @@ router.post('/', verifyToken, async (req, res) => {
       .from('events')
       .insert({
         owner_id: req.user.userId,
-        title,
-        type,
-        date,
-        location,
-        description,
+        title, type, date, location, description,
         goal_amount: goal_amount || 0,
         share_link: shareLink,
         status: 'active',
@@ -53,7 +49,6 @@ router.post('/', verifyToken, async (req, res) => {
       .single();
 
     if (error) throw error;
-
     res.json({ success: true, message: 'Event created successfully', event });
 
   } catch (err) {
@@ -108,6 +103,13 @@ router.get('/:id', async (req, res) => {
 
     if (error || !event) return res.status(404).json({ success: false, message: 'Event not found' });
 
+    // ✅ Fetch creator profile (name, phone, avatar only — no email for privacy)
+    const { data: creator } = await supabase
+      .from('users')
+      .select('id, name, phone, avatar_url')
+      .eq('id', event.owner_id)
+      .single();
+
     const { data: contributions } = await supabase
       .from('contributions')
       .select('id, contributor_name, amount, message, is_anonymous, created_at, status')
@@ -130,7 +132,12 @@ router.get('/:id', async (req, res) => {
 
     res.json({
       success: true,
-      event: { ...event, total_raised: totalRaised, total_contributors: totalContributors },
+      event: {
+        ...event,
+        total_raised: totalRaised,
+        total_contributors: totalContributors,
+        creator: creator || null, // ✅ Include creator info
+      },
       public_feed: publicFeed,
     });
 
