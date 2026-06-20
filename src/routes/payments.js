@@ -32,12 +32,13 @@ async function getPaypackToken() {
   return response.data.access;
 }
 
-// ── Format phone for Paypack ──
+// ✅ Fixed phone format for Paypack — always use 250 prefix
 function formatPhone(phone) {
   if (!phone) return phone;
   phone = phone.replace(/[\s-]/g, '');
-  if (phone.startsWith('+250')) return '0' + phone.slice(4);
-  if (phone.startsWith('250')) return '0' + phone.slice(3);
+  if (phone.startsWith('+250')) return '250' + phone.slice(4);
+  if (phone.startsWith('0')) return '250' + phone.slice(1);
+  if (phone.startsWith('250')) return phone;
   return phone;
 }
 
@@ -66,7 +67,7 @@ async function sendPushNotification(pushToken, title, body, data = {}) {
   }
 }
 
-// ── POST /api/payments/cashin ── Request Payment from User
+// ── POST /api/payments/cashin ──
 router.post('/cashin', async (req, res) => {
   try {
     const { amount, phone, contribution_id } = req.body;
@@ -126,7 +127,7 @@ router.post('/cashin', async (req, res) => {
   }
 });
 
-// ── GET /api/payments/status/:ref ── Check Payment Status
+// ── GET /api/payments/status/:ref ──
 router.get('/status/:ref', async (req, res) => {
   try {
     const { ref } = req.params;
@@ -152,7 +153,6 @@ router.get('/status/:ref', async (req, res) => {
         .single();
 
       if (contribution && contribution.status !== 'success') {
-        // ✅ Update contribution status
         await supabase
           .from('contributions')
           .update({ status: 'success' })
@@ -165,13 +165,11 @@ router.get('/status/:ref', async (req, res) => {
           .single();
 
         if (event) {
-          // ✅ Update event total raised
           await supabase
             .from('events')
             .update({ total_raised: (event.total_raised || 0) + contribution.amount })
             .eq('id', contribution.event_id);
 
-          // ✅ Update wallet balance
           const { data: wallet } = await supabase
             .from('wallets')
             .select('*')
@@ -188,15 +186,13 @@ router.get('/status/:ref', async (req, res) => {
               .eq('user_id', event.owner_id);
           }
 
-          // ✅ Save notification to database
           await supabase.from('notifications').insert({
             user_id: event.owner_id,
-            title: '💰 New Contribution Received!',
+            title: 'New Contribution Received!',
             message: `${contribution.contributor_name || 'Someone'} contributed RWF ${contribution.amount.toLocaleString()} to "${event.title}"`,
             type: 'contribution',
           });
 
-          // ✅ Send REAL push notification to event owner
           const { data: owner } = await supabase
             .from('users')
             .select('push_token, name')
@@ -206,44 +202,38 @@ router.get('/status/:ref', async (req, res) => {
           if (owner?.push_token) {
             await sendPushNotification(
               owner.push_token,
-              '💰 New Contribution!',
-              `${contribution.contributor_name || 'Someone'} just contributed RWF ${contribution.amount.toLocaleString()} to "${event.title}"! 🎉`,
-              {
-                type: 'contribution',
-                event_id: contribution.event_id,
-              }
+              'New Contribution!',
+              `${contribution.contributor_name || 'Someone'} just contributed RWF ${contribution.amount.toLocaleString()} to "${event.title}"!`,
+              { type: 'contribution', event_id: contribution.event_id }
             );
           }
 
-          // ✅ Check if goal reached and notify
           const newTotal = (event.total_raised || 0) + contribution.amount;
           const goalPercent = event.goal_amount > 0
             ? Math.round((newTotal / event.goal_amount) * 100) : 0;
 
           if (goalPercent >= 100 && event.total_raised < event.goal_amount) {
-            // Goal just reached!
             await supabase.from('notifications').insert({
               user_id: event.owner_id,
-              title: '🎯 Goal Reached!',
-              message: `Congratulations! Your event "${event.title}" has reached its goal! 🎉`,
+              title: 'Goal Reached!',
+              message: `Congratulations! Your event "${event.title}" has reached its goal!`,
               type: 'goal_reached',
             });
 
             if (owner?.push_token) {
               await sendPushNotification(
                 owner.push_token,
-                '🎯 Goal Reached!',
-                `Congratulations! "${event.title}" has reached its fundraising goal! 🎉`,
+                'Goal Reached!',
+                `Congratulations! "${event.title}" has reached its fundraising goal!`,
                 { type: 'goal_reached', event_id: event.id }
               );
             }
           } else if (goalPercent >= 80 && goalPercent < 100) {
-            // 80% milestone
             if (owner?.push_token) {
               await sendPushNotification(
                 owner.push_token,
-                '🔥 Almost There!',
-                `"${event.title}" is ${goalPercent}% funded! Keep sharing! 💪`,
+                'Almost There!',
+                `"${event.title}" is ${goalPercent}% funded! Keep sharing!`,
                 { type: 'milestone', event_id: event.id }
               );
             }
@@ -268,7 +258,7 @@ router.get('/status/:ref', async (req, res) => {
   }
 });
 
-// ── POST /api/payments/cashout ── Send Money to User (Withdrawal)
+// ── POST /api/payments/cashout ──
 router.post('/cashout', verifyToken, async (req, res) => {
   try {
     const { amount, phone } = req.body;
@@ -329,7 +319,6 @@ router.post('/cashout', verifyToken, async (req, res) => {
       status: 'pending',
     });
 
-    // ✅ Notify user about withdrawal
     const { data: user } = await supabase
       .from('users')
       .select('push_token')
@@ -339,7 +328,7 @@ router.post('/cashout', verifyToken, async (req, res) => {
     if (user?.push_token) {
       await sendPushNotification(
         user.push_token,
-        '💸 Withdrawal Initiated!',
+        'Withdrawal Initiated!',
         `RWF ${parseInt(amount).toLocaleString()} will be sent to your phone shortly!`,
         { type: 'withdrawal' }
       );
