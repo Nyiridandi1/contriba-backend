@@ -2,36 +2,43 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/database');
 const jwt = require('jsonwebtoken');
-const { Resend } = require('resend');
+const nodemailer = require('nodemailer');
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// ✅ Gmail SMTP transporter
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_PASS,
+  },
+});
 
 function generateOTP() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// ── Send OTP Email ──
+// ── Send OTP Email via Gmail ──
 async function sendOTPEmail(email, otp, name) {
   try {
-    await resend.emails.send({
-      from: 'Contriba <onboarding@resend.dev>',
+    await transporter.sendMail({
+      from: `Contriba <${process.env.GMAIL_USER}>`,
       to: email,
       subject: `${otp} is your Contriba verification code`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <div style="background: #7A001F; padding: 20px; border-radius: 12px; text-align: center; margin-bottom: 24px;">
+          <div style="background: #E60012; padding: 20px; border-radius: 12px; text-align: center; margin-bottom: 24px;">
             <h1 style="color: white; margin: 0; font-size: 28px;">Contriba</h1>
-            <p style="color: rgba(255,255,255,0.8); margin: 8px 0 0 0;">Digital Event Contributions 🇷🇼</p>
+            <p style="color: rgba(255,255,255,0.8); margin: 8px 0 0 0;">Digital Event Contributions</p>
           </div>
-          <h2 style="color: #1A1A1A;">Hello ${name || 'there'} 👋</h2>
+          <h2 style="color: #1A1A1A;">Hello ${name || 'there'}</h2>
           <p style="color: #666; font-size: 16px;">Your verification code is:</p>
-          <div style="background: #F9EEF1; border: 2px solid #7A001F; border-radius: 12px; padding: 24px; text-align: center; margin: 24px 0;">
-            <h1 style="color: #7A001F; font-size: 48px; letter-spacing: 12px; margin: 0;">${otp}</h1>
+          <div style="background: #FDF0F3; border: 2px solid #E60012; border-radius: 12px; padding: 24px; text-align: center; margin: 24px 0;">
+            <h1 style="color: #E60012; font-size: 48px; letter-spacing: 12px; margin: 0;">${otp}</h1>
           </div>
           <p style="color: #666; font-size: 14px;">This code expires in <strong>60 minutes</strong>.</p>
           <p style="color: #666; font-size: 14px;">If you didn't request this code, please ignore this email.</p>
           <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;">
-          <p style="color: #999; font-size: 12px; text-align: center;">Contriba - Digital Event Contributions Platform 🇷🇼<br>Kigali, Rwanda</p>
+          <p style="color: #999; font-size: 12px; text-align: center;">Contriba - Digital Event Contributions Platform<br>Kigali, Rwanda</p>
         </div>
       `,
     });
@@ -43,31 +50,31 @@ async function sendOTPEmail(email, otp, name) {
   }
 }
 
-// ── Send Welcome Email ──
+// ── Send Welcome Email via Gmail ──
 async function sendWelcomeEmail(email, name) {
   try {
-    await resend.emails.send({
-      from: 'Contriba <onboarding@resend.dev>',
+    await transporter.sendMail({
+      from: `Contriba <${process.env.GMAIL_USER}>`,
       to: email,
-      subject: `Welcome to Contriba${name ? ', ' + name : ''}! 🎉`,
+      subject: `Welcome to Contriba${name ? ', ' + name : ''}!`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <div style="background: #7A001F; padding: 20px; border-radius: 12px; text-align: center; margin-bottom: 24px;">
+          <div style="background: #E60012; padding: 20px; border-radius: 12px; text-align: center; margin-bottom: 24px;">
             <h1 style="color: white; margin: 0; font-size: 28px;">Contriba</h1>
-            <p style="color: rgba(255,255,255,0.8); margin: 8px 0 0 0;">Digital Event Contributions 🇷🇼</p>
+            <p style="color: rgba(255,255,255,0.8); margin: 8px 0 0 0;">Digital Event Contributions</p>
           </div>
-          <h2 style="color: #1A1A1A;">Welcome ${name || 'to Contriba'}! 🎉</h2>
-          <p style="color: #666; font-size: 16px;">You're now part of the Contriba family!</p>
-          <div style="background: #F9EEF1; border-radius: 12px; padding: 20px; margin: 24px 0;">
-            <h3 style="color: #7A001F; margin-top: 0;">What you can do with Contriba:</h3>
-            <p style="color: #666; margin: 8px 0;">🎊 Create events (Weddings, Birthdays, Introductions)</p>
-            <p style="color: #666; margin: 8px 0;">💰 Receive contributions via MTN MoMo & Airtel</p>
-            <p style="color: #666; margin: 8px 0;">🔴 Live feed of contributions</p>
-            <p style="color: #666; margin: 8px 0;">🙈 Anonymous contribution option</p>
+          <h2 style="color: #1A1A1A;">Welcome ${name || 'to Contriba'}!</h2>
+          <p style="color: #666; font-size: 16px;">You are now part of the Contriba family!</p>
+          <div style="background: #FDF0F3; border-radius: 12px; padding: 20px; margin: 24px 0;">
+            <h3 style="color: #E60012; margin-top: 0;">What you can do with Contriba:</h3>
+            <p style="color: #666; margin: 8px 0;">Create events (Weddings, Birthdays, Introductions)</p>
+            <p style="color: #666; margin: 8px 0;">Receive contributions via MTN MoMo and Airtel</p>
+            <p style="color: #666; margin: 8px 0;">Live feed of contributions</p>
+            <p style="color: #666; margin: 8px 0;">Anonymous contribution option</p>
           </div>
           <p style="color: #666; font-size: 14px;">Start by creating your first event!</p>
           <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;">
-          <p style="color: #999; font-size: 12px; text-align: center;">Contriba - Digital Event Contributions Platform 🇷🇼<br>Kigali, Rwanda</p>
+          <p style="color: #999; font-size: 12px; text-align: center;">Contriba - Digital Event Contributions Platform<br>Kigali, Rwanda</p>
         </div>
       `,
     });
@@ -266,21 +273,14 @@ router.post('/update-profile', verifyToken, async (req, res) => {
   }
 });
 
-// ✅ NEW: POST /api/auth/update-avatar
+// POST /api/auth/update-avatar
 router.post('/update-avatar', verifyToken, async (req, res) => {
   try {
     const { avatar_url } = req.body;
-    await supabase
-      .from('users')
-      .update({ avatar_url })
-      .eq('id', req.user.userId);
-
+    await supabase.from('users').update({ avatar_url }).eq('id', req.user.userId);
     const { data: user } = await supabase
-      .from('users')
-      .select('id, phone, name, email, avatar_url')
-      .eq('id', req.user.userId)
-      .single();
-
+      .from('users').select('id, phone, name, email, avatar_url')
+      .eq('id', req.user.userId).single();
     res.json({ success: true, message: 'Avatar updated!', user });
   } catch (err) {
     console.error('Update avatar error:', err.message);
@@ -307,14 +307,11 @@ router.post('/send-push', async (req, res) => {
     const { user_id, title, body, data } = req.body;
     const { data: users } = await supabase.from('users').select('push_token').eq('id', user_id).limit(1);
     const user = users && users.length > 0 ? users[0] : null;
-
     if (!user?.push_token) {
       return res.json({ success: false, message: 'No push token found for user' });
     }
-
     await sendPushNotification(user.push_token, title, body, data);
     res.json({ success: true, message: 'Notification sent!' });
-
   } catch (err) {
     console.error('Send push error:', err.message);
     res.status(500).json({ success: false, message: 'Failed to send notification' });
