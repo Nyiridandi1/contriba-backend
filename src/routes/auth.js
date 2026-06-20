@@ -2,104 +2,19 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../config/database');
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
+const bcrypt = require('bcryptjs');
 
-// ✅ Gmail SMTP transporter
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_PASS,
-  },
-});
-
-function generateOTP() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
-// ── Send OTP Email via Gmail ──
-async function sendOTPEmail(email, otp, name) {
-  try {
-    await transporter.sendMail({
-      from: `Contriba <${process.env.GMAIL_USER}>`,
-      to: email,
-      subject: `${otp} is your Contriba verification code`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <div style="background: #E60012; padding: 20px; border-radius: 12px; text-align: center; margin-bottom: 24px;">
-            <h1 style="color: white; margin: 0; font-size: 28px;">Contriba</h1>
-            <p style="color: rgba(255,255,255,0.8); margin: 8px 0 0 0;">Digital Event Contributions</p>
-          </div>
-          <h2 style="color: #1A1A1A;">Hello ${name || 'there'}</h2>
-          <p style="color: #666; font-size: 16px;">Your verification code is:</p>
-          <div style="background: #FDF0F3; border: 2px solid #E60012; border-radius: 12px; padding: 24px; text-align: center; margin: 24px 0;">
-            <h1 style="color: #E60012; font-size: 48px; letter-spacing: 12px; margin: 0;">${otp}</h1>
-          </div>
-          <p style="color: #666; font-size: 14px;">This code expires in <strong>60 minutes</strong>.</p>
-          <p style="color: #666; font-size: 14px;">If you didn't request this code, please ignore this email.</p>
-          <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;">
-          <p style="color: #999; font-size: 12px; text-align: center;">Contriba - Digital Event Contributions Platform<br>Kigali, Rwanda</p>
-        </div>
-      `,
-    });
-    console.log(`OTP email sent to ${email}`);
-    return true;
-  } catch (err) {
-    console.error('Email send error:', err.message);
-    return false;
-  }
-}
-
-// ── Send Welcome Email via Gmail ──
-async function sendWelcomeEmail(email, name) {
-  try {
-    await transporter.sendMail({
-      from: `Contriba <${process.env.GMAIL_USER}>`,
-      to: email,
-      subject: `Welcome to Contriba${name ? ', ' + name : ''}!`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <div style="background: #E60012; padding: 20px; border-radius: 12px; text-align: center; margin-bottom: 24px;">
-            <h1 style="color: white; margin: 0; font-size: 28px;">Contriba</h1>
-            <p style="color: rgba(255,255,255,0.8); margin: 8px 0 0 0;">Digital Event Contributions</p>
-          </div>
-          <h2 style="color: #1A1A1A;">Welcome ${name || 'to Contriba'}!</h2>
-          <p style="color: #666; font-size: 16px;">You are now part of the Contriba family!</p>
-          <div style="background: #FDF0F3; border-radius: 12px; padding: 20px; margin: 24px 0;">
-            <h3 style="color: #E60012; margin-top: 0;">What you can do with Contriba:</h3>
-            <p style="color: #666; margin: 8px 0;">Create events (Weddings, Birthdays, Introductions)</p>
-            <p style="color: #666; margin: 8px 0;">Receive contributions via MTN MoMo and Airtel</p>
-            <p style="color: #666; margin: 8px 0;">Live feed of contributions</p>
-            <p style="color: #666; margin: 8px 0;">Anonymous contribution option</p>
-          </div>
-          <p style="color: #666; font-size: 14px;">Start by creating your first event!</p>
-          <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;">
-          <p style="color: #999; font-size: 12px; text-align: center;">Contriba - Digital Event Contributions Platform<br>Kigali, Rwanda</p>
-        </div>
-      `,
-    });
-    console.log(`Welcome email sent to ${email}`);
-  } catch (err) {
-    console.error('Welcome email error:', err.message);
-  }
+function generateToken(userId, phone) {
+  return jwt.sign({ userId, phone }, process.env.JWT_SECRET, { expiresIn: '30d' });
 }
 
 // ── Send Push Notification ──
 async function sendPushNotification(pushToken, title, body, data = {}) {
   try {
-    const message = {
-      to: pushToken,
-      sound: 'default',
-      title,
-      body,
-      data,
-    };
+    const message = { to: pushToken, sound: 'default', title, body, data };
     const response = await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify(message),
     });
     const result = await response.json();
@@ -124,110 +39,100 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-// POST /api/auth/send-otp
-router.post('/send-otp', async (req, res) => {
+// ── POST /api/auth/register ──
+// Register with Name + Phone + PIN (no email needed!)
+router.post('/register', async (req, res) => {
   try {
-    const { phone, email, name, is_login } = req.body;
+    const { name, phone, pin } = req.body;
+
+    if (!name) return res.status(400).json({ success: false, message: 'Full name is required' });
     if (!phone) return res.status(400).json({ success: false, message: 'Phone number is required' });
+    if (!pin || pin.length < 4) return res.status(400).json({ success: false, message: 'PIN must be at least 4 digits' });
 
-    const { data: users } = await supabase.from('users').select('*').eq('phone', phone).limit(1);
-    const existingUser = users && users.length > 0 ? users[0] : null;
-
-    if (existingUser) {
-      if (!is_login && email) {
-        return res.status(400).json({ success: false, message: 'This number already has an account. Please login instead!' });
-      }
-      if (email && existingUser.email && existingUser.email.toLowerCase() !== email.toLowerCase()) {
-        return res.status(400).json({ success: false, message: 'Credentials mismatch! The email does not match this phone number.' });
-      }
-
-      const otp = generateOTP();
-      await supabase.from('otps').delete().eq('phone', phone);
-      await supabase.from('otps').insert({ phone, otp_code: otp, expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString() });
-      console.log(`OTP for ${phone}: ${otp}`);
-
-      const emailToUse = existingUser.email || email;
-      if (emailToUse) {
-        await sendOTPEmail(emailToUse, otp, existingUser.name);
-        return res.json({ success: true, message: `OTP sent to your registered email`, email_sent: true, email_hint: emailToUse.replace(/(.{2}).*(@.*)/, '$1***$2') });
-      }
-      return res.json({ success: true, message: 'OTP sent successfully', otp });
+    // Check if phone already exists
+    const { data: existing } = await supabase.from('users').select('id').eq('phone', phone).limit(1);
+    if (existing && existing.length > 0) {
+      return res.status(400).json({ success: false, message: 'This phone number is already registered. Please login!' });
     }
 
-    if (is_login) {
-      return res.status(400).json({ success: false, message: 'This number is not registered. Please sign up first!' });
-    }
+    // Hash PIN
+    const hashedPin = await bcrypt.hash(pin, 10);
 
-    if (email) {
-      const { data: emailUsers } = await supabase.from('users').select('*').eq('email', email).limit(1);
-      if (emailUsers && emailUsers.length > 0) {
-        return res.status(400).json({ success: false, message: 'This email is already linked to another account. Please use a different email.' });
-      }
-    }
+    // Create user
+    const { data: newUsers, error } = await supabase
+      .from('users')
+      .insert({ name, phone, pin: hashedPin })
+      .select();
 
-    const otp = generateOTP();
-    await supabase.from('otps').delete().eq('phone', phone);
-    await supabase.from('otps').insert({ phone, otp_code: otp, expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString() });
-    console.log(`OTP for ${phone}: ${otp}`);
+    if (error) throw error;
 
-    if (email) {
-      await sendOTPEmail(email, otp, name);
-      return res.json({ success: true, message: `OTP sent to ${email}`, email_sent: true });
-    }
+    const user = newUsers[0];
 
-    res.json({ success: true, message: 'OTP sent successfully', otp });
+    // Create wallet
+    await supabase.from('wallets').insert({ user_id: user.id });
+
+    const token = generateToken(user.id, user.phone);
+
+    console.log(`New user registered: ${phone}`);
+
+    res.json({
+      success: true,
+      message: 'Account created successfully!',
+      token,
+      user: { id: user.id, phone: user.phone, name: user.name, avatar_url: user.avatar_url },
+    });
 
   } catch (err) {
-    console.error('Send OTP error:', err.message);
-    res.status(500).json({ success: false, message: 'Failed to send OTP' });
+    console.error('Register error:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to create account' });
   }
 });
 
-// POST /api/auth/verify-otp
-router.post('/verify-otp', async (req, res) => {
+// ── POST /api/auth/login ──
+// Login with Phone + PIN
+router.post('/login', async (req, res) => {
   try {
-    const { phone, otp, name, email } = req.body;
-    if (!phone || !otp) return res.status(400).json({ success: false, message: 'Phone and OTP are required' });
+    const { phone, pin } = req.body;
 
-    const { data: otpData, error } = await supabase
-      .from('otps').select('*').eq('phone', phone).eq('otp_code', otp)
-      .eq('used', false).order('created_at', { ascending: false }).limit(1);
+    if (!phone) return res.status(400).json({ success: false, message: 'Phone number is required' });
+    if (!pin) return res.status(400).json({ success: false, message: 'PIN is required' });
 
-    if (error || !otpData || otpData.length === 0) {
-      return res.status(400).json({ success: false, message: 'Invalid OTP' });
-    }
-
-    await supabase.from('otps').update({ used: true }).eq('id', otpData[0].id);
-
-    let { data: users } = await supabase.from('users').select('*').eq('phone', phone).limit(1);
-    let user = users && users.length > 0 ? users[0] : null;
-    let isNewUser = false;
+    // Find user
+    const { data: users } = await supabase.from('users').select('*').eq('phone', phone).limit(1);
+    const user = users && users.length > 0 ? users[0] : null;
 
     if (!user) {
-      const { data: newUsers, error: createError } = await supabase
-        .from('users').insert({ phone, name: name || null, email: email || null }).select();
-      if (createError) throw createError;
-      user = newUsers[0];
-      await supabase.from('wallets').insert({ user_id: user.id });
-      isNewUser = true;
-    } else if (name && !user.name) {
-      await supabase.from('users').update({ name, email }).eq('id', user.id);
-      user = { ...user, name, email };
+      return res.status(400).json({ success: false, message: 'Phone number not registered. Please create an account!' });
     }
 
-    if (isNewUser && email) await sendWelcomeEmail(email, name);
+    if (!user.pin) {
+      return res.status(400).json({ success: false, message: 'No PIN set. Please create an account!' });
+    }
 
-    const token = jwt.sign({ userId: user.id, phone: user.phone }, process.env.JWT_SECRET, { expiresIn: '30d' });
+    // Check PIN
+    const pinMatch = await bcrypt.compare(pin, user.pin);
+    if (!pinMatch) {
+      return res.status(400).json({ success: false, message: 'Wrong PIN. Please try again!' });
+    }
 
-    res.json({ success: true, message: 'Login successful', token, user: { id: user.id, phone: user.phone, name: user.name, email: user.email, avatar_url: user.avatar_url } });
+    const token = generateToken(user.id, user.phone);
+
+    console.log(`User logged in: ${phone}`);
+
+    res.json({
+      success: true,
+      message: 'Login successful!',
+      token,
+      user: { id: user.id, phone: user.phone, name: user.name, avatar_url: user.avatar_url },
+    });
 
   } catch (err) {
-    console.error('Verify OTP error:', err.message);
-    res.status(500).json({ success: false, message: 'Failed to verify OTP' });
+    console.error('Login error:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to login' });
   }
 });
 
-// POST /api/auth/google
+// ── POST /api/auth/google ──
 router.post('/google', async (req, res) => {
   try {
     const { email, name, photo, google_id } = req.body;
@@ -235,25 +140,28 @@ router.post('/google', async (req, res) => {
 
     let { data: users } = await supabase.from('users').select('*').eq('email', email).limit(1);
     let user = users && users.length > 0 ? users[0] : null;
-    let isNewUser = false;
 
     if (!user) {
-      const { data: newUsers, error: createError } = await supabase
-        .from('users').insert({ email, name, avatar_url: photo, google_id }).select();
-      if (createError) throw createError;
+      const { data: newUsers, error } = await supabase
+        .from('users')
+        .insert({ email, name, avatar_url: photo, google_id })
+        .select();
+      if (error) throw error;
       user = newUsers[0];
       await supabase.from('wallets').insert({ user_id: user.id });
-      isNewUser = true;
     } else {
       await supabase.from('users').update({ name, avatar_url: photo, google_id }).eq('id', user.id);
       user = { ...user, name, avatar_url: photo };
     }
 
-    if (isNewUser) await sendWelcomeEmail(email, name);
+    const token = generateToken(user.id, user.phone);
 
-    const token = jwt.sign({ userId: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '30d' });
-
-    res.json({ success: true, message: 'Google login successful', token, user: { id: user.id, phone: user.phone, name: user.name, email: user.email, avatar_url: user.avatar_url } });
+    res.json({
+      success: true,
+      message: 'Google login successful',
+      token,
+      user: { id: user.id, phone: user.phone, name: user.name, email: user.email, avatar_url: user.avatar_url },
+    });
 
   } catch (err) {
     console.error('Google auth error:', err.message);
@@ -261,7 +169,7 @@ router.post('/google', async (req, res) => {
   }
 });
 
-// POST /api/auth/update-profile
+// ── POST /api/auth/update-profile ──
 router.post('/update-profile', verifyToken, async (req, res) => {
   try {
     const { name, email } = req.body;
@@ -273,14 +181,16 @@ router.post('/update-profile', verifyToken, async (req, res) => {
   }
 });
 
-// POST /api/auth/update-avatar
+// ── POST /api/auth/update-avatar ──
 router.post('/update-avatar', verifyToken, async (req, res) => {
   try {
     const { avatar_url } = req.body;
     await supabase.from('users').update({ avatar_url }).eq('id', req.user.userId);
     const { data: user } = await supabase
-      .from('users').select('id, phone, name, email, avatar_url')
-      .eq('id', req.user.userId).single();
+      .from('users')
+      .select('id, phone, name, email, avatar_url')
+      .eq('id', req.user.userId)
+      .single();
     res.json({ success: true, message: 'Avatar updated!', user });
   } catch (err) {
     console.error('Update avatar error:', err.message);
@@ -288,12 +198,34 @@ router.post('/update-avatar', verifyToken, async (req, res) => {
   }
 });
 
-// POST /api/auth/update-push-token
+// ── POST /api/auth/change-pin ──
+router.post('/change-pin', verifyToken, async (req, res) => {
+  try {
+    const { old_pin, new_pin } = req.body;
+
+    const { data: users } = await supabase.from('users').select('*').eq('id', req.user.userId).limit(1);
+    const user = users && users.length > 0 ? users[0] : null;
+
+    if (!user) return res.status(400).json({ success: false, message: 'User not found' });
+
+    const pinMatch = await bcrypt.compare(old_pin, user.pin);
+    if (!pinMatch) return res.status(400).json({ success: false, message: 'Wrong current PIN!' });
+
+    const hashedPin = await bcrypt.hash(new_pin, 10);
+    await supabase.from('users').update({ pin: hashedPin }).eq('id', req.user.userId);
+
+    res.json({ success: true, message: 'PIN changed successfully!' });
+  } catch (err) {
+    console.error('Change PIN error:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to change PIN' });
+  }
+});
+
+// ── POST /api/auth/update-push-token ──
 router.post('/update-push-token', verifyToken, async (req, res) => {
   try {
     const { push_token } = req.body;
     await supabase.from('users').update({ push_token }).eq('id', req.user.userId);
-    console.log(`Push token saved for user ${req.user.userId}`);
     res.json({ success: true, message: 'Push token saved' });
   } catch (err) {
     console.error('Push token error:', err.message);
@@ -301,15 +233,13 @@ router.post('/update-push-token', verifyToken, async (req, res) => {
   }
 });
 
-// POST /api/auth/send-push
+// ── POST /api/auth/send-push ──
 router.post('/send-push', async (req, res) => {
   try {
     const { user_id, title, body, data } = req.body;
     const { data: users } = await supabase.from('users').select('push_token').eq('id', user_id).limit(1);
     const user = users && users.length > 0 ? users[0] : null;
-    if (!user?.push_token) {
-      return res.json({ success: false, message: 'No push token found for user' });
-    }
+    if (!user?.push_token) return res.json({ success: false, message: 'No push token found' });
     await sendPushNotification(user.push_token, title, body, data);
     res.json({ success: true, message: 'Notification sent!' });
   } catch (err) {
