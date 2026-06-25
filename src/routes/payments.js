@@ -77,7 +77,7 @@ function calculateFees(amount) {
 }
 
 // ── Auto Cashout to Event Owner ──
-async function disbursToOwner(token, ownerPhone, ownerAmount, eventTitle, contributorName) {
+async function disbursToOwner(token, ownerPhone, ownerAmount) {
   try {
     const formattedPhone = formatPhone(ownerPhone);
     console.log(`Disbursing RWF ${ownerAmount} to event owner: ${formattedPhone}`);
@@ -135,7 +135,7 @@ async function processSuccessfulPayment(ref) {
 
     // Calculate fees
     const { contribaFee, paypackCashoutFee, ownerAmount } = calculateFees(contribution.amount);
-    console.log(`Fee Breakdown: amount=${contribution.amount}, contribaFee=${contribaFee}, ownerAmount=${ownerAmount}`);
+    console.log(`Fee Breakdown: amount=${contribution.amount}, contribaFee=${contribaFee}, paypackCashoutFee=${paypackCashoutFee}, ownerAmount=${ownerAmount}`);
 
     // Update event total raised
     await supabase
@@ -160,45 +160,45 @@ async function processSuccessfulPayment(ref) {
         .eq('user_id', event.owner_id);
     }
 
-    // Get owner details
+    // Get owner push token for notification
     const { data: owner } = await supabase
       .from('users')
-      .select('push_token, name, phone')
+      .select('push_token, name')
       .eq('id', event.owner_id)
       .single();
 
-    // Auto disburse to event owner MoMo
-    if (owner?.phone && ownerAmount > 0) {
+    // ✅ Use event.owner_phone — this is the MoMo number set when creating the event!
+    const receiverPhone = event.owner_phone;
+    console.log(`Event owner MoMo number: ${receiverPhone}`);
+
+    if (receiverPhone && ownerAmount > 0) {
       const token = await getPaypackToken();
-      const disbursement = await disbursToOwner(
-        token,
-        owner.phone,
-        ownerAmount,
-        event.title,
-        contribution.contributor_name
-      );
+      const disbursement = await disbursToOwner(token, receiverPhone, ownerAmount);
 
       if (disbursement) {
         await supabase
           .from('contributions')
           .update({ disbursement_ref: disbursement.ref })
           .eq('transaction_id', ref);
+        console.log(`Money sent to ${receiverPhone}: RWF ${ownerAmount}`);
       }
+    } else {
+      console.log(`No receiver phone set for event ${event.id} or amount too low`);
     }
 
-    // Send notification
+    // Send notification to event owner
     await supabase.from('notifications').insert({
       user_id: event.owner_id,
       title: 'New Contribution Received!',
-      message: `${contribution.contributor_name || 'Someone'} contributed RWF ${contribution.amount.toLocaleString()} to "${event.title}". You received RWF ${ownerAmount.toLocaleString()} after fees.`,
+      message: `${contribution.contributor_name || 'Someone'} contributed RWF ${contribution.amount.toLocaleString()} to "${event.title}". RWF ${ownerAmount.toLocaleString()} sent to ${receiverPhone}.`,
       type: 'contribution',
     });
 
     if (owner?.push_token) {
       await sendPushNotification(
         owner.push_token,
-        'New Contribution!',
-        `${contribution.contributor_name || 'Someone'} contributed RWF ${contribution.amount.toLocaleString()}! You received RWF ${ownerAmount.toLocaleString()} 💸`,
+        'New Contribution! 💸',
+        `${contribution.contributor_name || 'Someone'} contributed RWF ${contribution.amount.toLocaleString()}! RWF ${ownerAmount.toLocaleString()} sent to your MoMo!`,
         { type: 'contribution', event_id: contribution.event_id }
       );
     }
@@ -215,7 +215,6 @@ async function processSuccessfulPayment(ref) {
         message: `Congratulations! Your event "${event.title}" has reached its goal!`,
         type: 'goal_reached',
       });
-
       if (owner?.push_token) {
         await sendPushNotification(
           owner.push_token,
@@ -302,13 +301,12 @@ router.post('/cashin', async (req, res) => {
 });
 
 // ── GET /api/payments/status/:ref ──
-// Uses Paypack Events API to get real transaction status
 router.get('/status/:ref', async (req, res) => {
   try {
     const { ref } = req.params;
     const token = await getPaypackToken();
 
-    // ✅ Use Events API — this gives the real status!
+    // ✅ Use Events API — gives real status!
     const response = await axios.get(
       `https://payments.paypack.rw/api/events/transactions?ref=${ref}&kind=CASHIN`,
       {
@@ -320,7 +318,7 @@ router.get('/status/:ref', async (req, res) => {
     );
 
     const eventsData = response.data;
-    console.log(`Events API for ref ${ref}:`, JSON.stringify(eventsData).slice(0, 200));
+    console.log(`Events API for ref ${ref}:`, JSON.stringify(eventsData).slice(0, 300));
 
     // Find processed event
     const processedEvent = eventsData.transactions?.find(
@@ -445,16 +443,12 @@ router.post('/cashout', verifyToken, async (req, res) => {
 router.post('/webhook', async (req, res) => {
   try {
     console.log('Webhook received:', JSON.stringify(req.body));
-
     const { event, data } = req.body;
-
     if (event === 'transaction:processed' && data?.kind === 'CASHIN' && data?.status === 'successful') {
       console.log(`Webhook: processing payment ref=${data.ref}`);
       await processSuccessfulPayment(data.ref);
     }
-
     res.json({ success: true });
-
   } catch (err) {
     console.error('Webhook error:', err.message);
     res.status(500).json({ success: false });
