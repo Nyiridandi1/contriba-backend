@@ -8,6 +8,17 @@ function generateToken(userId, phone) {
   return jwt.sign({ userId, phone }, process.env.JWT_SECRET, { expiresIn: '30d' });
 }
 
+// ── Format Phone — always save as 07XXXXXXXX ──
+function formatPhone(phone) {
+  if (!phone) return phone;
+  phone = phone.toString().replace(/[\s\-\+]/g, '');
+  // Remove country code 250 if present
+  if (phone.startsWith('2500')) return '0' + phone.slice(4); // fix +2500XXXXXXXX
+  if (phone.startsWith('250')) return '0' + phone.slice(3);  // fix 250XXXXXXXX
+  if (phone.startsWith('0')) return phone;                    // already 07XXXXXXXX
+  return '0' + phone;
+}
+
 // ── Send Push Notification ──
 async function sendPushNotification(pushToken, title, body, data = {}) {
   try {
@@ -40,10 +51,10 @@ const verifyToken = (req, res, next) => {
 };
 
 // ── POST /api/auth/register ──
-// Register with Name + Phone + PIN (no email needed!)
 router.post('/register', async (req, res) => {
   try {
-    const { name, phone, pin } = req.body;
+    const { name, pin } = req.body;
+    const phone = formatPhone(req.body.phone); // ✅ Always clean phone before saving
 
     if (!name) return res.status(400).json({ success: false, message: 'Full name is required' });
     if (!phone) return res.status(400).json({ success: false, message: 'Phone number is required' });
@@ -89,10 +100,10 @@ router.post('/register', async (req, res) => {
 });
 
 // ── POST /api/auth/login ──
-// Login with Phone + PIN
 router.post('/login', async (req, res) => {
   try {
-    const { phone, pin } = req.body;
+    const phone = formatPhone(req.body.phone); // ✅ Always clean phone before lookup
+    const { pin } = req.body;
 
     if (!phone) return res.status(400).json({ success: false, message: 'Phone number is required' });
     if (!pin) return res.status(400).json({ success: false, message: 'PIN is required' });
