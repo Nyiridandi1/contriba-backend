@@ -32,7 +32,7 @@ async function getPaypackToken() {
   return response.data.access;
 }
 
-// ✅ Fixed phone format for Paypack — always use 250 prefix
+// ── Format Phone for Paypack ──
 function formatPhone(phone) {
   if (!phone) return phone;
   phone = phone.replace(/[\s-]/g, '');
@@ -42,7 +42,7 @@ function formatPhone(phone) {
   return phone;
 }
 
-// ✅ Send Push Notification via Expo
+// ── Send Push Notification via Expo ──
 async function sendPushNotification(pushToken, title, body, data = {}) {
   try {
     if (!pushToken) return;
@@ -64,6 +64,46 @@ async function sendPushNotification(pushToken, title, body, data = {}) {
     console.log('Push notification sent to:', pushToken);
   } catch (err) {
     console.error('Push notification error:', err.message);
+  }
+}
+
+// ── Calculate Contriba Fee ──
+// Contriba keeps 1% of the contribution amount
+// Paypack cashout fee is flat 200 RWF
+function calculateFees(amount) {
+  const contribaFeePercent = 0.01;                              // 1%
+  const paypackCashoutFee  = 200;                               // flat RWF
+  const contribaFee        = Math.floor(amount * contribaFeePercent);
+  const ownerAmount        = amount - contribaFee - paypackCashoutFee;
+  return { contribaFee, paypackCashoutFee, ownerAmount };
+}
+
+// ── Automatic Cashout to Event Owner ──
+async function disbursToOwner(token, ownerPhone, ownerAmount, eventTitle, contributorName) {
+  try {
+    const formattedPhone = formatPhone(ownerPhone);
+    console.log(`Disbursing RWF ${ownerAmount} to event owner: ${formattedPhone}`);
+
+    const response = await axios.post(
+      'https://payments.paypack.rw/api/transactions/cashout',
+      {
+        amount: parseInt(ownerAmount),
+        number: formattedPhone,
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+      }
+    );
+
+    console.log(`Disbursement successful to ${formattedPhone}:`, response.data.ref);
+    return response.data;
+  } catch (err) {
+    console.error('Disbursement error:', err.response?.data || err.message);
+    return null;
   }
 }
 
@@ -153,6 +193,8 @@ router.get('/status/:ref', async (req, res) => {
         .single();
 
       if (contribution && contribution.status !== 'success') {
+
+        // ── Mark contribution as success ──
         await supabase
           .from('contributions')
           .update({ status: 'success' })
@@ -160,16 +202,30 @@ router.get('/status/:ref', async (req, res) => {
 
         const { data: event } = await supabase
           .from('events')
-          .select('*, title')
+          .select('*')
           .eq('id', contribution.event_id)
           .single();
 
         if (event) {
+
+          // ── Calculate fees ──
+          const { contribaFee, paypackCashoutFee, ownerAmount } = calculateFees(contribution.amount);
+
+          console.log(`
+            ── Fee Breakdown ──
+            Contribution:       RWF ${contribution.amount}
+            Contriba fee (1%):  RWF ${contribaFee}
+            Paypack cashout:    RWF ${paypackCashoutFee}
+            Owner receives:     RWF ${ownerAmount}
+          `);
+
+          // ── Update event total raised ──
           await supabase
             .from('events')
             .update({ total_raised: (event.total_raised || 0) + contribution.amount })
             .eq('id', contribution.event_id);
 
+          // ── Update owner wallet with amount AFTER fees ──
           const { data: wallet } = await supabase
             .from('wallets')
             .select('*')
@@ -180,34 +236,56 @@ router.get('/status/:ref', async (req, res) => {
             await supabase
               .from('wallets')
               .update({
-                balance: wallet.balance + contribution.amount,
-                total_in: wallet.total_in + contribution.amount,
+                balance: wallet.balance + ownerAmount,
+                total_in: wallet.total_in + ownerAmount,
               })
               .eq('user_id', event.owner_id);
           }
 
+          // ── Get event owner details ──
+          const { data: owner } = await supabase
+            .from('users')
+            .select('push_token, name, phone')
+            .eq('id', event.owner_id)
+            .single();
+
+          // ── Auto disburse to event owner's MoMo ──
+          if (owner?.phone && ownerAmount > 0) {
+            const disbursement = await disbursToOwner(
+              token,
+              owner.phone,
+              ownerAmount,
+              event.title,
+              contribution.contributor_name
+            );
+
+            // Save disbursement reference
+            if (disbursement) {
+              await supabase
+                .from('contributions')
+                .update({ disbursement_ref: disbursement.ref })
+                .eq('transaction_id', ref);
+            }
+          }
+
+          // ── Send notification to event owner ──
           await supabase.from('notifications').insert({
             user_id: event.owner_id,
             title: 'New Contribution Received!',
-            message: `${contribution.contributor_name || 'Someone'} contributed RWF ${contribution.amount.toLocaleString()} to "${event.title}"`,
+            message: `${contribution.contributor_name || 'Someone'} contributed RWF ${contribution.amount.toLocaleString()} to "${event.title}". You received RWF ${ownerAmount.toLocaleString()} after fees.`,
             type: 'contribution',
           });
-
-          const { data: owner } = await supabase
-            .from('users')
-            .select('push_token, name')
-            .eq('id', event.owner_id)
-            .single();
 
           if (owner?.push_token) {
             await sendPushNotification(
               owner.push_token,
               'New Contribution!',
-              `${contribution.contributor_name || 'Someone'} just contributed RWF ${contribution.amount.toLocaleString()} to "${event.title}"!`,
+              `${contribution.contributor_name || 'Someone'} contributed RWF ${contribution.amount.toLocaleString()}! You received RWF ${ownerAmount.toLocaleString()} 💸`,
               { type: 'contribution', event_id: contribution.event_id }
             );
           }
 
+          // ── Goal milestone notifications ──
           const newTotal = (event.total_raised || 0) + contribution.amount;
           const goalPercent = event.goal_amount > 0
             ? Math.round((newTotal / event.goal_amount) * 100) : 0;
@@ -215,7 +293,7 @@ router.get('/status/:ref', async (req, res) => {
           if (goalPercent >= 100 && event.total_raised < event.goal_amount) {
             await supabase.from('notifications').insert({
               user_id: event.owner_id,
-              title: 'Goal Reached!',
+              title: 'Goal Reached! 🎉',
               message: `Congratulations! Your event "${event.title}" has reached its goal!`,
               type: 'goal_reached',
             });
@@ -223,7 +301,7 @@ router.get('/status/:ref', async (req, res) => {
             if (owner?.push_token) {
               await sendPushNotification(
                 owner.push_token,
-                'Goal Reached!',
+                'Goal Reached! 🎉',
                 `Congratulations! "${event.title}" has reached its fundraising goal!`,
                 { type: 'goal_reached', event_id: event.id }
               );
