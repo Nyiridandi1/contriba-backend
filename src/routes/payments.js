@@ -185,7 +185,7 @@ router.get('/status/:ref', async (req, res) => {
 
     const transaction = response.data;
 
-    if (transaction.status === 'successful') {
+    if (transaction.status === 'successful' || transaction.status === 'processed') {
       const { data: contribution } = await supabase
         .from('contributions')
         .select('*')
