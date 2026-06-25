@@ -67,13 +67,34 @@ async function sendPushNotification(pushToken, title, body, data = {}) {
   }
 }
 
-// ── Calculate Contriba Fee ──
-function calculateFees(amount) {
-  const contribaFeePercent = 0.01;
-  const paypackCashoutFee  = 200;
-  const contribaFee        = Math.floor(amount * contribaFeePercent);
-  const ownerAmount        = amount - contribaFee - paypackCashoutFee;
-  return { contribaFee, paypackCashoutFee, ownerAmount };
+// ── Calculate Fees ──
+// Flow:
+// 1. User pays: amount (e.g. RWF 1,000)
+// 2. Paypack cashin fee (3.5% MTN / 2.5% Airtel) is deducted automatically
+// 3. Remaining lands in Contriba Paypack balance
+// 4. Contriba keeps 1% profit
+// 5. Paypack cashout fee (flat RWF 200) is deducted when sending to owner
+// 6. Owner receives the rest
+function calculateFees(amount, paymentMethod = 'mtn') {
+  const cashinFeeRate     = paymentMethod === 'airtel' ? 0.025 : 0.035; // 2.5% Airtel, 3.5% MTN
+  const paypackCashinFee  = Math.ceil(amount * cashinFeeRate);
+  const afterCashin       = amount - paypackCashinFee;   // what lands in Contriba balance
+  const contribaFee       = Math.floor(afterCashin * 0.01); // Contriba 1% profit
+  const paypackCashoutFee = 200;                          // flat RWF 200
+  const ownerAmount       = afterCashin - contribaFee - paypackCashoutFee;
+
+  console.log(`
+    ── Fee Breakdown ──
+    User pays:           RWF ${amount}
+    Paypack cashin fee:  RWF ${paypackCashinFee} (${cashinFeeRate * 100}%)
+    After cashin:        RWF ${afterCashin}
+    Contriba fee (1%):   RWF ${contribaFee}
+    Paypack cashout fee: RWF ${paypackCashoutFee}
+    Owner receives:      RWF ${ownerAmount}
+    Contriba profit:     RWF ${contribaFee}
+  `);
+
+  return { paypackCashinFee, afterCashin, contribaFee, paypackCashoutFee, ownerAmount };
 }
 
 // ── Auto Cashout to Event Owner ──
@@ -133,9 +154,12 @@ async function processSuccessfulPayment(ref) {
 
     if (!event) return;
 
-    // Calculate fees
-    const { contribaFee, paypackCashoutFee, ownerAmount } = calculateFees(contribution.amount);
-    console.log(`Fee Breakdown: amount=${contribution.amount}, contribaFee=${contribaFee}, paypackCashoutFee=${paypackCashoutFee}, ownerAmount=${ownerAmount}`);
+    // ✅ Calculate fees correctly based on payment method
+    const paymentMethod = contribution.payment_method || 'mtn';
+    const { contribaFee, paypackCashoutFee, ownerAmount } = calculateFees(
+      contribution.amount,
+      paymentMethod
+    );
 
     // Update event total raised
     await supabase
@@ -143,7 +167,7 @@ async function processSuccessfulPayment(ref) {
       .update({ total_raised: (event.total_raised || 0) + contribution.amount })
       .eq('id', contribution.event_id);
 
-    // Update owner wallet
+    // Update owner wallet with amount after fees
     const { data: wallet } = await supabase
       .from('wallets')
       .select('*')
@@ -167,9 +191,9 @@ async function processSuccessfulPayment(ref) {
       .eq('id', event.owner_id)
       .single();
 
-    // ✅ Use event.owner_phone — this is the MoMo number set when creating the event!
+    // ✅ Use event.owner_phone — the MoMo number set when creating the event!
     const receiverPhone = event.owner_phone;
-    console.log(`Event owner MoMo number: ${receiverPhone}`);
+    console.log(`Sending RWF ${ownerAmount} to event owner MoMo: ${receiverPhone}`);
 
     if (receiverPhone && ownerAmount > 0) {
       const token = await getPaypackToken();
@@ -180,7 +204,8 @@ async function processSuccessfulPayment(ref) {
           .from('contributions')
           .update({ disbursement_ref: disbursement.ref })
           .eq('transaction_id', ref);
-        console.log(`Money sent to ${receiverPhone}: RWF ${ownerAmount}`);
+        console.log(`✅ Money sent to ${receiverPhone}: RWF ${ownerAmount}`);
+        console.log(`✅ Contriba profit: RWF ${contribaFee}`);
       }
     } else {
       console.log(`No receiver phone set for event ${event.id} or amount too low`);
@@ -189,7 +214,7 @@ async function processSuccessfulPayment(ref) {
     // Send notification to event owner
     await supabase.from('notifications').insert({
       user_id: event.owner_id,
-      title: 'New Contribution Received!',
+      title: 'New Contribution Received! 💸',
       message: `${contribution.contributor_name || 'Someone'} contributed RWF ${contribution.amount.toLocaleString()} to "${event.title}". RWF ${ownerAmount.toLocaleString()} sent to ${receiverPhone}.`,
       type: 'contribution',
     });
@@ -234,7 +259,7 @@ async function processSuccessfulPayment(ref) {
       }
     }
 
-    console.log(`Payment ${ref} processed successfully!`);
+    console.log(`✅ Payment ${ref} fully processed!`);
   } catch (err) {
     console.error('Process payment error:', err.message);
   }
@@ -318,7 +343,6 @@ router.get('/status/:ref', async (req, res) => {
     );
 
     const eventsData = response.data;
-    console.log(`Events API for ref ${ref}:`, JSON.stringify(eventsData).slice(0, 300));
 
     // Find processed event
     const processedEvent = eventsData.transactions?.find(
