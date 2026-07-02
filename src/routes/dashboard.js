@@ -36,23 +36,47 @@ router.get('/', verifyToken, async (req, res) => {
       .eq('user_id', req.user.userId)
       .single();
 
-    // Get recent contributions for all user events
     const eventIds = events?.map(e => e.id) || [];
     let recentContributions = [];
+    let allContributions = [];
     let totalContributors = 0;
+    let totalRaised = 0;
 
     if (eventIds.length > 0) {
-      const { data: contributions } = await supabase
+      // ✅ Get ALL successful contributions to calculate real totals
+      const { data: allContribs } = await supabase
         .from('contributions')
         .select('*')
         .in('event_id', eventIds)
         .eq('status', 'success')
-        .order('created_at', { ascending: false })
-        .limit(10);
+        .order('created_at', { ascending: false });
 
-      recentContributions = contributions || [];
-      totalContributors = contributions?.length || 0;
+      allContributions = allContribs || [];
+
+      // ✅ Calculate real total raised from contributions
+      totalRaised = allContributions.reduce(
+        (sum, c) => sum + Number(c.amount || 0), 0
+      );
+      totalContributors = allContributions.length;
+
+      // Recent 10 for display
+      recentContributions = allContributions.slice(0, 10);
     }
+
+    // ✅ Calculate total raised per event
+    const eventsWithRaised = (events || []).map(event => {
+      const eventContribs = allContributions.filter(
+        c => c.event_id === event.id
+      );
+      const eventRaised = eventContribs.reduce(
+        (sum, c) => sum + Number(c.amount || 0), 0
+      );
+      return {
+        ...event,
+        total_raised: eventRaised,
+        total_contributors: eventContribs.length,
+      };
+    });
 
     // Get unread notifications count
     const { data: notifications } = await supabase
@@ -63,9 +87,6 @@ router.get('/', verifyToken, async (req, res) => {
 
     const unreadNotifications = notifications?.length || 0;
 
-    // Calculate total raised across all events
-    const totalRaised = events?.reduce((sum, e) => sum + (e.total_raised || 0), 0) || 0;
-
     res.json({
       success: true,
       dashboard: {
@@ -74,7 +95,7 @@ router.get('/', verifyToken, async (req, res) => {
         total_contributors: totalContributors,
         wallet_balance: wallet?.balance || 0,
         unread_notifications: unreadNotifications,
-        events: events || [],
+        events: eventsWithRaised,
         recent_contributions: recentContributions,
       },
     });
