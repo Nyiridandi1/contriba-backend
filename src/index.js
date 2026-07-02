@@ -19,6 +19,7 @@ app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/payments', require('./routes/payments'));
 app.use('/api/comments', require('./routes/comments')); // ✅ NEW
+app.use('/api/upload', require('./routes/upload')); // ✅ AVATAR UPLOAD
 
 // ── TEST ROUTE ──
 app.get('/', (req, res) => {
@@ -42,6 +43,7 @@ app.get('/', (req, res) => {
       'POST /api/payments/cashout',
       'GET  /api/comments/:event_id',
       'POST /api/comments/:event_id',
+      'POST /api/upload/avatar',
     ]
   });
 });

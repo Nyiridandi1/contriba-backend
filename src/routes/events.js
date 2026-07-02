@@ -133,12 +133,19 @@ router.get('/:id', async (req, res) => {
       amount: c.is_anonymous ? null : c.amount,
     })) || [];
 
+    // ✅ Get total likes
+    const { count: likesCount } = await supabase
+      .from('event_likes')
+      .select('*', { count: 'exact', head: true })
+      .eq('event_id', id);
+
     res.json({
       success: true,
       event: {
         ...event,
         total_raised: totalRaised,
         total_contributors: totalContributors,
+        total_likes: likesCount || 0,
         creator: creator || null,
       },
       public_feed: publicFeed,
@@ -224,6 +231,105 @@ router.delete('/:id', verifyToken, async (req, res) => {
   } catch (err) {
     console.error('Delete event error:', err.message);
     res.status(500).json({ success: false, message: 'Failed to delete event' });
+  }
+});
+
+// ── POST /api/events/:id/like ── Like Event
+router.post('/:id/like', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data: existing } = await supabase
+      .from('event_likes')
+      .select('id')
+      .eq('event_id', id)
+      .eq('user_id', req.user.userId)
+      .single();
+
+    if (existing) {
+      return res.json({ success: true, liked: true, message: 'Already liked' });
+    }
+
+    const { error } = await supabase
+      .from('event_likes')
+      .insert({ event_id: id, user_id: req.user.userId });
+
+    if (error) throw error;
+
+    const { count } = await supabase
+      .from('event_likes')
+      .select('*', { count: 'exact', head: true })
+      .eq('event_id', id);
+
+    res.json({ success: true, liked: true, likes: count });
+
+  } catch (err) {
+    console.error('Like event error:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to like event' });
+  }
+});
+
+// ── DELETE /api/events/:id/like ── Unlike Event
+router.delete('/:id/like', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { error } = await supabase
+      .from('event_likes')
+      .delete()
+      .eq('event_id', id)
+      .eq('user_id', req.user.userId);
+
+    if (error) throw error;
+
+    const { count } = await supabase
+      .from('event_likes')
+      .select('*', { count: 'exact', head: true })
+      .eq('event_id', id);
+
+    res.json({ success: true, liked: false, likes: count });
+
+  } catch (err) {
+    console.error('Unlike event error:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to unlike event' });
+  }
+});
+
+// ── GET /api/events/:id/likes ── Get Like Count + User Like Status
+router.get('/:id/likes', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { count } = await supabase
+      .from('event_likes')
+      .select('*', { count: 'exact', head: true })
+      .eq('event_id', id);
+
+    // Check if current user liked (optional auth)
+    const token = req.headers.authorization?.split(' ')[1];
+    let userLiked = false;
+
+    if (token) {
+      try {
+        const jwt = require('jsonwebtoken');
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const { data: existing } = await supabase
+          .from('event_likes')
+          .select('id')
+          .eq('event_id', id)
+          .eq('user_id', decoded.userId)
+          .single();
+        userLiked = !!existing;
+      } catch {
+        // Invalid token — skip
+      }
+    }
+
+    res.json({ success: true, likes: count || 0, liked: userLiked });
+
+  } catch (err) {
+    console.error('Get likes error:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to get likes' });
   }
 });
 
