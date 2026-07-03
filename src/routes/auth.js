@@ -41,62 +41,52 @@ async function sendPushNotification(pushToken, title, body, data = {}) {
   }
 }
 
-async function sendOTPEmail(email, otp, name) {
+async function sendOTPEmail(email, otp, name, subject = 'Your Contriba verification code') {
   try {
     await resend.emails.send({
       from: 'Contriba <support@contriba.online>',
       to: email,
-      subject: `Your Contriba verification code: ${otp}`,
+      subject: `${subject}: ${otp}`,
       html: `
         <!DOCTYPE html>
         <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        </head>
+        <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
         <body style="margin:0;padding:0;background:#f7f8fc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background:#f7f8fc;padding:40px 0;">
-            <tr>
-              <td align="center">
-                <table width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
-                  <tr>
-                    <td style="background:linear-gradient(135deg,#111827,#1f2937);padding:32px 40px;text-align:center;">
-                      <h1 style="margin:0;color:#ffffff;font-size:28px;font-weight:900;letter-spacing:-1px;">Contriba</h1>
-                      <p style="margin:8px 0 0;color:rgba(255,255,255,0.6);font-size:14px;">Rwanda's #1 Event Contribution Platform</p>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style="padding:40px;">
-                      <p style="margin:0 0 8px;color:#6b7280;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Hello ${name},</p>
-                      <h2 style="margin:0 0 16px;color:#111827;font-size:24px;font-weight:900;letter-spacing:-0.5px;">Verify your email address</h2>
-                      <p style="margin:0 0 32px;color:#6b7280;font-size:15px;line-height:1.7;">
-                        Enter the verification code below to complete your Contriba account registration. This code expires in <strong style="color:#111827;">30 minutes</strong>.
+            <tr><td align="center">
+              <table width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
+                <tr>
+                  <td style="background:linear-gradient(135deg,#111827,#1f2937);padding:32px 40px;text-align:center;">
+                    <h1 style="margin:0;color:#ffffff;font-size:28px;font-weight:900;letter-spacing:-1px;">Contriba</h1>
+                    <p style="margin:8px 0 0;color:rgba(255,255,255,0.6);font-size:14px;">Rwanda's #1 Event Contribution Platform</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:40px;">
+                    <p style="margin:0 0 8px;color:#6b7280;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Hello ${name},</p>
+                    <h2 style="margin:0 0 16px;color:#111827;font-size:24px;font-weight:900;letter-spacing:-0.5px;">${subject}</h2>
+                    <p style="margin:0 0 32px;color:#6b7280;font-size:15px;line-height:1.7;">
+                      Use the verification code below. This code expires in <strong style="color:#111827;">30 minutes</strong>.
+                    </p>
+                    <div style="background:#f7f8fc;border:2px solid #E50914;border-radius:16px;padding:24px;text-align:center;margin-bottom:32px;">
+                      <p style="margin:0 0 8px;color:#6b7280;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;">Your verification code</p>
+                      <p style="margin:0;color:#111827;font-size:48px;font-weight:900;letter-spacing:12px;">${otp}</p>
+                    </div>
+                    <div style="background:rgba(229,9,20,0.04);border:1px solid rgba(229,9,20,0.15);border-radius:12px;padding:16px;margin-bottom:24px;">
+                      <p style="margin:0;color:#374151;font-size:13px;line-height:1.6;">
+                        <strong style="color:#E50914;">Never share this code</strong> with anyone. Contriba staff will never ask for your verification code.
                       </p>
-                      <div style="background:#f7f8fc;border:2px solid #E50914;border-radius:16px;padding:24px;text-align:center;margin-bottom:32px;">
-                        <p style="margin:0 0 8px;color:#6b7280;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;">Your verification code</p>
-                        <p style="margin:0;color:#111827;font-size:48px;font-weight:900;letter-spacing:12px;font-variant-numeric:tabular-nums;">${otp}</p>
-                      </div>
-                      <div style="background:rgba(229,9,20,0.04);border:1px solid rgba(229,9,20,0.15);border-radius:12px;padding:16px;margin-bottom:24px;">
-                        <p style="margin:0;color:#374151;font-size:13px;line-height:1.6;">
-                          <strong style="color:#E50914;">Never share this code</strong> with anyone. Contriba staff will never ask for your verification code.
-                        </p>
-                      </div>
-                      <p style="margin:0;color:#9ca3af;font-size:13px;line-height:1.6;">
-                        If you did not request this code, please ignore this email. Your account is safe.
-                      </p>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style="padding:24px 40px;border-top:1px solid #f3f4f6;text-align:center;">
-                      <p style="margin:0;color:#9ca3af;font-size:12px;">
-                        © 2025 Contriba · Kigali, Rwanda<br>
-                        <a href="https://contriba.online" style="color:#E50914;text-decoration:none;">contriba.online</a>
-                      </p>
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
+                    </div>
+                    <p style="margin:0;color:#9ca3af;font-size:13px;line-height:1.6;">If you did not request this code, please ignore this email.</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:24px 40px;border-top:1px solid #f3f4f6;text-align:center;">
+                    <p style="margin:0;color:#9ca3af;font-size:12px;">© 2025 Contriba · Kigali, Rwanda · <a href="https://contriba.online" style="color:#E50914;text-decoration:none;">contriba.online</a></p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
           </table>
         </body>
         </html>
@@ -121,49 +111,53 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-// ── POST /api/auth/send-otp ──
+// ── POST /api/auth/send-otp ── Registration OTP
 router.post('/send-otp', async (req, res) => {
   try {
-    const { email, name, phone } = req.body;
+    const { email, name, phone, isReset } = req.body;
 
     if (!email) return res.status(400).json({ success: false, message: 'Email is required' });
     if (!name) return res.status(400).json({ success: false, message: 'Name is required' });
 
     const cleanPhone = formatPhone(phone);
 
-    const { data: existingPhone } = await supabase
-      .from('users').select('id').eq('phone', cleanPhone).limit(1);
-    if (existingPhone && existingPhone.length > 0) {
-      return res.status(400).json({ success: false, message: 'This phone number is already registered. Please login!' });
-    }
+    if (!isReset) {
+      // Registration: check phone and email not already used
+      const { data: existingPhone } = await supabase
+        .from('users').select('id').eq('phone', cleanPhone).limit(1);
+      if (existingPhone && existingPhone.length > 0) {
+        return res.status(400).json({ success: false, message: 'This phone number is already registered. Please login!' });
+      }
 
-    const { data: existingEmail } = await supabase
-      .from('users').select('id').eq('email', email).limit(1);
-    if (existingEmail && existingEmail.length > 0) {
-      return res.status(400).json({ success: false, message: 'This email is already registered. Please login!' });
+      const { data: existingEmail } = await supabase
+        .from('users').select('id').eq('email', email).limit(1);
+      if (existingEmail && existingEmail.length > 0) {
+        return res.status(400).json({ success: false, message: 'This email is already registered. Please login!' });
+      }
+    } else {
+      // PIN reset: verify phone + email match a real account
+      const { data: users } = await supabase
+        .from('users').select('id, name').eq('phone', cleanPhone).eq('email', email).limit(1);
+      if (!users || users.length === 0) {
+        return res.status(400).json({ success: false, message: 'No account found with this phone and email combination.' });
+      }
     }
 
     const otp = generateOTP();
-    const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // ✅ 30 minutes
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
 
     await supabase.from('otps').delete().eq('email', email);
+    await supabase.from('otps').insert({ email, otp, expires_at: expiresAt.toISOString() });
 
-    await supabase.from('otps').insert({
-      email,
-      otp,
-      expires_at: expiresAt.toISOString(),
-    });
+    const subject = isReset ? 'PIN Reset verification code' : 'Verify your email address';
+    await sendOTPEmail(email, otp, name, subject);
 
-    const sent = await sendOTPEmail(email, otp, name);
-    if (!sent) {
-      return res.status(500).json({ success: false, message: 'Failed to send verification email. Please try again.' });
-    }
-
-    console.log(`OTP sent to ${email}`);
+    console.log(`OTP sent to ${email}: ${otp}`);
 
     res.json({
       success: true,
       message: `Verification code sent to ${email}`,
+      otp, // ✅ Return OTP for display on screen
     });
 
   } catch (err) {
@@ -172,7 +166,7 @@ router.post('/send-otp', async (req, res) => {
   }
 });
 
-// ── POST /api/auth/verify-otp ──
+// ── POST /api/auth/verify-otp ── Complete registration
 router.post('/verify-otp', async (req, res) => {
   try {
     const { email, otp, name, phone, pin } = req.body;
@@ -184,13 +178,8 @@ router.post('/verify-otp', async (req, res) => {
     const cleanPhone = formatPhone(phone);
 
     const { data: otps } = await supabase
-      .from('otps')
-      .select('*')
-      .eq('email', email)
-      .eq('otp', otp)
-      .eq('used', false)
-      .order('created_at', { ascending: false })
-      .limit(1);
+      .from('otps').select('*').eq('email', email).eq('otp', otp).eq('used', false)
+      .order('created_at', { ascending: false }).limit(1);
 
     const otpRecord = otps && otps.length > 0 ? otps[0] : null;
 
@@ -199,7 +188,7 @@ router.post('/verify-otp', async (req, res) => {
     }
 
     if (new Date() > new Date(otpRecord.expires_at)) {
-      return res.status(400).json({ success: false, message: 'Verification code expired. Please request a new one.' });
+      return res.status(400).json({ success: false, message: 'Code expired. Please request a new one.' });
     }
 
     await supabase.from('otps').update({ used: true }).eq('id', otpRecord.id);
@@ -214,7 +203,6 @@ router.post('/verify-otp', async (req, res) => {
     if (error) throw error;
 
     const user = newUsers[0];
-
     await supabase.from('wallets').insert({ user_id: user.id });
 
     const token = generateToken(user.id, user.phone);
@@ -234,7 +222,60 @@ router.post('/verify-otp', async (req, res) => {
   }
 });
 
-// ── POST /api/auth/register ── (kept for mobile app)
+// ── POST /api/auth/reset-pin ── Reset PIN after OTP verified
+router.post('/reset-pin', async (req, res) => {
+  try {
+    const { phone, email, otp, new_pin } = req.body;
+
+    if (!phone || !email || !otp || !new_pin) {
+      return res.status(400).json({ success: false, message: 'All fields are required' });
+    }
+
+    const cleanPhone = formatPhone(phone);
+
+    // Verify OTP
+    const { data: otps } = await supabase
+      .from('otps').select('*').eq('email', email).eq('otp', otp).eq('used', false)
+      .order('created_at', { ascending: false }).limit(1);
+
+    const otpRecord = otps && otps.length > 0 ? otps[0] : null;
+
+    if (!otpRecord) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired verification code.' });
+    }
+
+    if (new Date() > new Date(otpRecord.expires_at)) {
+      return res.status(400).json({ success: false, message: 'Code expired. Please request a new one.' });
+    }
+
+    // Find user
+    const { data: users } = await supabase
+      .from('users').select('*').eq('phone', cleanPhone).eq('email', email).limit(1);
+
+    const user = users && users.length > 0 ? users[0] : null;
+
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'Account not found.' });
+    }
+
+    // Update PIN
+    const hashedPin = await bcrypt.hash(new_pin, 10);
+    await supabase.from('users').update({ pin: hashedPin }).eq('id', user.id);
+
+    // Mark OTP as used
+    await supabase.from('otps').update({ used: true }).eq('id', otpRecord.id);
+
+    console.log(`PIN reset for: ${cleanPhone}`);
+
+    res.json({ success: true, message: 'PIN reset successfully!' });
+
+  } catch (err) {
+    console.error('Reset PIN error:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to reset PIN' });
+  }
+});
+
+// ── POST /api/auth/register ── (mobile app compatibility)
 router.post('/register', async (req, res) => {
   try {
     const { name, pin } = req.body;
@@ -250,21 +291,15 @@ router.post('/register', async (req, res) => {
     }
 
     const hashedPin = await bcrypt.hash(pin, 10);
-
     const { data: newUsers, error } = await supabase
-      .from('users')
-      .insert({ name, phone, pin: hashedPin })
-      .select();
+      .from('users').insert({ name, phone, pin: hashedPin }).select();
 
     if (error) throw error;
 
     const user = newUsers[0];
-
     await supabase.from('wallets').insert({ user_id: user.id });
 
     const token = generateToken(user.id, user.phone);
-
-    console.log(`New user registered: ${phone}`);
 
     res.json({
       success: true,
@@ -291,22 +326,13 @@ router.post('/login', async (req, res) => {
     const { data: users } = await supabase.from('users').select('*').eq('phone', phone).limit(1);
     const user = users && users.length > 0 ? users[0] : null;
 
-    if (!user) {
-      return res.status(400).json({ success: false, message: 'Phone number not registered. Please create an account!' });
-    }
-
-    if (!user.pin) {
-      return res.status(400).json({ success: false, message: 'No PIN set. Please create an account!' });
-    }
+    if (!user) return res.status(400).json({ success: false, message: 'Phone number not registered. Please create an account!' });
+    if (!user.pin) return res.status(400).json({ success: false, message: 'No PIN set. Please create an account!' });
 
     const pinMatch = await bcrypt.compare(pin, user.pin);
-    if (!pinMatch) {
-      return res.status(400).json({ success: false, message: 'Wrong PIN. Please try again!' });
-    }
+    if (!pinMatch) return res.status(400).json({ success: false, message: 'Wrong PIN. Please try again!' });
 
     const token = generateToken(user.id, user.phone);
-
-    console.log(`User logged in: ${phone}`);
 
     res.json({
       success: true,
@@ -332,9 +358,7 @@ router.post('/google', async (req, res) => {
 
     if (!user) {
       const { data: newUsers, error } = await supabase
-        .from('users')
-        .insert({ email, name, avatar_url: photo, google_id })
-        .select();
+        .from('users').insert({ email, name, avatar_url: photo, google_id }).select();
       if (error) throw error;
       user = newUsers[0];
       await supabase.from('wallets').insert({ user_id: user.id });
@@ -344,13 +368,7 @@ router.post('/google', async (req, res) => {
     }
 
     const token = generateToken(user.id, user.phone);
-
-    res.json({
-      success: true,
-      message: 'Google login successful',
-      token,
-      user: { id: user.id, phone: user.phone, name: user.name, email: user.email, avatar_url: user.avatar_url },
-    });
+    res.json({ success: true, message: 'Google login successful', token, user: { id: user.id, phone: user.phone, name: user.name, email: user.email, avatar_url: user.avatar_url } });
 
   } catch (err) {
     console.error('Google auth error:', err.message);
@@ -365,7 +383,6 @@ router.post('/update-profile', verifyToken, async (req, res) => {
     await supabase.from('users').update({ name, email }).eq('id', req.user.userId);
     res.json({ success: true, message: 'Profile updated successfully' });
   } catch (err) {
-    console.error('Update profile error:', err.message);
     res.status(500).json({ success: false, message: 'Failed to update profile' });
   }
 });
@@ -375,14 +392,9 @@ router.post('/update-avatar', verifyToken, async (req, res) => {
   try {
     const { avatar_url } = req.body;
     await supabase.from('users').update({ avatar_url }).eq('id', req.user.userId);
-    const { data: user } = await supabase
-      .from('users')
-      .select('id, phone, name, email, avatar_url')
-      .eq('id', req.user.userId)
-      .single();
+    const { data: user } = await supabase.from('users').select('id, phone, name, email, avatar_url').eq('id', req.user.userId).single();
     res.json({ success: true, message: 'Avatar updated!', user });
   } catch (err) {
-    console.error('Update avatar error:', err.message);
     res.status(500).json({ success: false, message: 'Failed to update avatar' });
   }
 });
@@ -391,21 +403,15 @@ router.post('/update-avatar', verifyToken, async (req, res) => {
 router.post('/change-pin', verifyToken, async (req, res) => {
   try {
     const { old_pin, new_pin } = req.body;
-
     const { data: users } = await supabase.from('users').select('*').eq('id', req.user.userId).limit(1);
     const user = users && users.length > 0 ? users[0] : null;
-
     if (!user) return res.status(400).json({ success: false, message: 'User not found' });
-
     const pinMatch = await bcrypt.compare(old_pin, user.pin);
     if (!pinMatch) return res.status(400).json({ success: false, message: 'Wrong current PIN!' });
-
     const hashedPin = await bcrypt.hash(new_pin, 10);
     await supabase.from('users').update({ pin: hashedPin }).eq('id', req.user.userId);
-
     res.json({ success: true, message: 'PIN changed successfully!' });
   } catch (err) {
-    console.error('Change PIN error:', err.message);
     res.status(500).json({ success: false, message: 'Failed to change PIN' });
   }
 });
@@ -417,7 +423,6 @@ router.post('/update-push-token', verifyToken, async (req, res) => {
     await supabase.from('users').update({ push_token }).eq('id', req.user.userId);
     res.json({ success: true, message: 'Push token saved' });
   } catch (err) {
-    console.error('Push token error:', err.message);
     res.status(500).json({ success: false, message: 'Failed to save push token' });
   }
 });
@@ -432,7 +437,6 @@ router.post('/send-push', async (req, res) => {
     await sendPushNotification(user.push_token, title, body, data);
     res.json({ success: true, message: 'Notification sent!' });
   } catch (err) {
-    console.error('Send push error:', err.message);
     res.status(500).json({ success: false, message: 'Failed to send notification' });
   }
 });
