@@ -59,44 +59,33 @@ async function sendOTPEmail(email, otp, name) {
             <tr>
               <td align="center">
                 <table width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
-                  
-                  <!-- Header -->
                   <tr>
                     <td style="background:linear-gradient(135deg,#111827,#1f2937);padding:32px 40px;text-align:center;">
                       <h1 style="margin:0;color:#ffffff;font-size:28px;font-weight:900;letter-spacing:-1px;">Contriba</h1>
                       <p style="margin:8px 0 0;color:rgba(255,255,255,0.6);font-size:14px;">Rwanda's #1 Event Contribution Platform</p>
                     </td>
                   </tr>
-
-                  <!-- Body -->
                   <tr>
                     <td style="padding:40px;">
                       <p style="margin:0 0 8px;color:#6b7280;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Hello ${name},</p>
                       <h2 style="margin:0 0 16px;color:#111827;font-size:24px;font-weight:900;letter-spacing:-0.5px;">Verify your email address</h2>
                       <p style="margin:0 0 32px;color:#6b7280;font-size:15px;line-height:1.7;">
-                        Enter the verification code below to complete your Contriba account registration. This code expires in <strong style="color:#111827;">10 minutes</strong>.
+                        Enter the verification code below to complete your Contriba account registration. This code expires in <strong style="color:#111827;">30 minutes</strong>.
                       </p>
-
-                      <!-- OTP Box -->
                       <div style="background:#f7f8fc;border:2px solid #E50914;border-radius:16px;padding:24px;text-align:center;margin-bottom:32px;">
                         <p style="margin:0 0 8px;color:#6b7280;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;">Your verification code</p>
                         <p style="margin:0;color:#111827;font-size:48px;font-weight:900;letter-spacing:12px;font-variant-numeric:tabular-nums;">${otp}</p>
                       </div>
-
-                      <!-- Warning -->
                       <div style="background:rgba(229,9,20,0.04);border:1px solid rgba(229,9,20,0.15);border-radius:12px;padding:16px;margin-bottom:24px;">
                         <p style="margin:0;color:#374151;font-size:13px;line-height:1.6;">
                           <strong style="color:#E50914;">Never share this code</strong> with anyone. Contriba staff will never ask for your verification code.
                         </p>
                       </div>
-
                       <p style="margin:0;color:#9ca3af;font-size:13px;line-height:1.6;">
                         If you did not request this code, please ignore this email. Your account is safe.
                       </p>
                     </td>
                   </tr>
-
-                  <!-- Footer -->
                   <tr>
                     <td style="padding:24px 40px;border-top:1px solid #f3f4f6;text-align:center;">
                       <p style="margin:0;color:#9ca3af;font-size:12px;">
@@ -105,7 +94,6 @@ async function sendOTPEmail(email, otp, name) {
                       </p>
                     </td>
                   </tr>
-
                 </table>
               </td>
             </tr>
@@ -133,7 +121,7 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-// ── POST /api/auth/send-otp ── Send OTP to email before registration
+// ── POST /api/auth/send-otp ──
 router.post('/send-otp', async (req, res) => {
   try {
     const { email, name, phone } = req.body;
@@ -143,35 +131,29 @@ router.post('/send-otp', async (req, res) => {
 
     const cleanPhone = formatPhone(phone);
 
-    // Check if phone already exists
     const { data: existingPhone } = await supabase
       .from('users').select('id').eq('phone', cleanPhone).limit(1);
     if (existingPhone && existingPhone.length > 0) {
       return res.status(400).json({ success: false, message: 'This phone number is already registered. Please login!' });
     }
 
-    // Check if email already exists
     const { data: existingEmail } = await supabase
       .from('users').select('id').eq('email', email).limit(1);
     if (existingEmail && existingEmail.length > 0) {
       return res.status(400).json({ success: false, message: 'This email is already registered. Please login!' });
     }
 
-    // Generate OTP
     const otp = generateOTP();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // ✅ 30 minutes
 
-    // Delete old OTPs for this email
     await supabase.from('otps').delete().eq('email', email);
 
-    // Save OTP
     await supabase.from('otps').insert({
       email,
       otp,
       expires_at: expiresAt.toISOString(),
     });
 
-    // Send OTP email
     const sent = await sendOTPEmail(email, otp, name);
     if (!sent) {
       return res.status(500).json({ success: false, message: 'Failed to send verification email. Please try again.' });
@@ -190,7 +172,7 @@ router.post('/send-otp', async (req, res) => {
   }
 });
 
-// ── POST /api/auth/verify-otp ── Verify OTP + complete registration
+// ── POST /api/auth/verify-otp ──
 router.post('/verify-otp', async (req, res) => {
   try {
     const { email, otp, name, phone, pin } = req.body;
@@ -201,7 +183,6 @@ router.post('/verify-otp', async (req, res) => {
 
     const cleanPhone = formatPhone(phone);
 
-    // Find OTP
     const { data: otps } = await supabase
       .from('otps')
       .select('*')
@@ -217,18 +198,14 @@ router.post('/verify-otp', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid verification code. Please try again.' });
     }
 
-    // Check expiry
     if (new Date() > new Date(otpRecord.expires_at)) {
       return res.status(400).json({ success: false, message: 'Verification code expired. Please request a new one.' });
     }
 
-    // Mark OTP as used
     await supabase.from('otps').update({ used: true }).eq('id', otpRecord.id);
 
-    // Hash PIN
     const hashedPin = await bcrypt.hash(pin, 10);
 
-    // Create user
     const { data: newUsers, error } = await supabase
       .from('users')
       .insert({ name, phone: cleanPhone, email, pin: hashedPin, email_verified: true })
@@ -238,7 +215,6 @@ router.post('/verify-otp', async (req, res) => {
 
     const user = newUsers[0];
 
-    // Create wallet
     await supabase.from('wallets').insert({ user_id: user.id });
 
     const token = generateToken(user.id, user.phone);
@@ -258,7 +234,7 @@ router.post('/verify-otp', async (req, res) => {
   }
 });
 
-// ── POST /api/auth/register ── (kept for mobile app compatibility)
+// ── POST /api/auth/register ── (kept for mobile app)
 router.post('/register', async (req, res) => {
   try {
     const { name, pin } = req.body;
