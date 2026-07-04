@@ -173,6 +173,7 @@ router.get("/crm", verifyToken, async (req, res) => {
         contributions: 1,
         transaction_id: item.transaction_id || null,
         thank_you_sent: item.thank_you_sent === true,
+        thank_you_sent_at: item.thank_you_sent_at || null,
       };
     });
 
@@ -203,7 +204,89 @@ router.get("/crm", verifyToken, async (req, res) => {
   }
 });
 
-// ── POST /api/contributions/initiate ──
+// ── POST /api/contributions/:id/thank-you ──
+router.post("/:id/thank-you", verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.userId;
+
+    const { data: contribution, error: contributionError } = await supabase
+      .from("contributions")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (contributionError || !contribution) {
+      return res.status(404).json({
+        success: false,
+        message: "Contribution not found",
+      });
+    }
+
+    const { data: event, error: eventError } = await supabase
+      .from("events")
+      .select("*")
+      .eq("id", contribution.event_id)
+      .single();
+
+    if (eventError || !event) {
+      return res.status(404).json({
+        success: false,
+        message: "Event not found",
+      });
+    }
+
+    if (event.owner_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not allowed to thank this contributor",
+      });
+    }
+
+    if (contribution.status !== "success") {
+      return res.status(400).json({
+        success: false,
+        message: "Only successful contributors can receive a thank-you message",
+      });
+    }
+
+    const { data: updatedContribution, error: updateError } = await supabase
+      .from("contributions")
+      .update({
+        thank_you_sent: true,
+        thank_you_sent_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+
+    await supabase.from("notifications").insert({
+      user_id: userId,
+      title: "Thank-you Sent",
+      message: `You thanked ${
+        contribution.is_anonymous
+          ? "Anonymous"
+          : contribution.contributor_name || "a contributor"
+      } for contributing to "${event.title}".`,
+      type: "thank_you",
+    });
+
+    res.json({
+      success: true,
+      message: "Thank-you message marked as sent",
+      contribution: updatedContribution,
+    });
+  } catch (err) {
+    console.error("Thank-you error:", err.message);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to send thank-you message",
+    });
+  }
+});// ── POST /api/contributions/initiate ──
 router.post("/initiate", async (req, res) => {
   try {
     const {
@@ -253,6 +336,7 @@ router.post("/initiate", async (req, res) => {
         message,
         status: "pending",
         is_anonymous: is_anonymous || false,
+        thank_you_sent: false,
       })
       .select()
       .single();
