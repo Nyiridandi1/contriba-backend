@@ -66,11 +66,42 @@ router.get('/', async (req, res) => {
       .from('events')
       .select('*')
       .eq('status', 'active')
-      .eq('is_private', false) // ✅ only show public events
+      .eq('is_private', false)
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    res.json({ success: true, events });
+
+    const eventIds = events?.map((event) => event.id) || [];
+
+    if (eventIds.length === 0) {
+      return res.json({ success: true, events: [] });
+    }
+
+    const { data: contributions, error: contributionsError } = await supabase
+      .from('contributions')
+      .select('id, event_id, amount, status')
+      .in('event_id', eventIds);
+
+    if (contributionsError) throw contributionsError;
+
+    const eventsWithStats = events.map((event) => {
+      const successfulContributions = (contributions || []).filter(
+        (item) => item.event_id === event.id && item.status === 'success'
+      );
+
+      const totalRaised = successfulContributions.reduce(
+        (sum, item) => sum + Number(item.amount || 0),
+        0
+      );
+
+      return {
+        ...event,
+        total_raised: totalRaised,
+        total_contributors: successfulContributions.length,
+      };
+    });
+
+    res.json({ success: true, events: eventsWithStats });
 
   } catch (err) {
     console.error('Get events error:', err.message);
