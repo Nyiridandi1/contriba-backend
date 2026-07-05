@@ -110,6 +110,7 @@ router.get('/', async (req, res) => {
 });
 
 // ── GET /api/events/my-events ── Get Owner's Events (all — public + private)
+// ── GET /api/events/my-events ── Get Owner's Events
 router.get('/my-events', verifyToken, async (req, res) => {
   try {
     const { data: events, error } = await supabase
@@ -119,11 +120,49 @@ router.get('/my-events', verifyToken, async (req, res) => {
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    res.json({ success: true, events });
+
+    const eventIds = events?.map(event => event.id) || [];
+
+    if (eventIds.length === 0) {
+      return res.json({
+        success: true,
+        events: []
+      });
+    }
+
+    const { data: contributions, error: contributionsError } = await supabase
+      .from('contributions')
+      .select('id,event_id,amount,status')
+      .in('event_id', eventIds);
+
+    if (contributionsError) throw contributionsError;
+
+    const eventsWithStats = events.map(event => {
+      const successful = contributions.filter(
+        c => c.event_id === event.id && c.status === 'success'
+      );
+
+      return {
+        ...event,
+        total_raised: successful.reduce(
+          (sum, c) => sum + Number(c.amount || 0),
+          0
+        ),
+        total_contributors: successful.length
+      };
+    });
+
+    res.json({
+      success: true,
+      events: eventsWithStats
+    });
 
   } catch (err) {
     console.error('Get my events error:', err.message);
-    res.status(500).json({ success: false, message: 'Failed to get events' });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get events'
+    });
   }
 });
 
