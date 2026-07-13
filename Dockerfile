@@ -2,7 +2,6 @@ FROM node:22-bookworm-slim
 
 WORKDIR /app
 
-# Install Chromium and the Linux libraries it needs.
 RUN apt-get update && apt-get install -y \
     chromium \
     ca-certificates \
@@ -43,16 +42,16 @@ RUN apt-get update && apt-get install -y \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Use the Chromium installed above instead of downloading another browser.
+ENV NODE_ENV=production
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-COPY package.json package-lock.json ./
+# Copy package.json only.
+# Do not copy the incompatible package-lock during installation.
+COPY package.json ./
 
-RUN npm ci --omit=dev
+RUN npm install --omit=dev --legacy-peer-deps
 
 COPY . .
-
-ENV NODE_ENV=production
 
 CMD ["npm", "start"]
