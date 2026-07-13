@@ -659,7 +659,7 @@ async function getPublicSharePage(
                     )}
                   );
                 },
-                150
+                3000
               );
             </script>
           </head>
