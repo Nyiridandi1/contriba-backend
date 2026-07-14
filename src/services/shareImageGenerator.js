@@ -329,12 +329,12 @@ async function generateEventShareImage(
     */
 
     await page.waitForSelector(
-      "#contriba-share-card .event-card",
-      {
-        visible: true,
-        timeout: 15000,
-      }
-    );
+  "#contriba-share-card .social-preview",
+  {
+    visible: true,
+    timeout: 15000,
+  }
+);
 
     /*
     |--------------------------------------------------------------------------
