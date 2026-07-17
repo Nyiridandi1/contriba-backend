@@ -451,23 +451,18 @@ async function getShareImage(req, res) {
     const cacheKey = `${eventId}:${version}`;
 
     const sendImage = (buffer) => {
-      // Prevent stale cached metadata (important for social crawlers)
-      res.removeHeader("ETag");
-      res.removeHeader("Last-Modified");
+  res.set({
+    "Content-Type": "image/jpeg",
+    "Content-Length": buffer.length,
+    "Content-Disposition":
+      `inline; filename="contriba-event-${eventId}.jpg"`,
+    "Cache-Control":
+      "public, max-age=86400, s-maxage=86400",
+    "X-Content-Type-Options": "nosniff",
+  });
 
-      res.set({
-        "Content-Type": "image/jpeg",
-        "Content-Length": buffer.length,
-        "Cache-Control":
-          "no-store, no-cache, must-revalidate, proxy-revalidate",
-        Pragma: "no-cache",
-        Expires: "0",
-        "Content-Disposition": `inline; filename="contriba-event-${eventId}.jpg`,
-      });
-
-      return res.status(200).send(buffer);
-    };
-
+  return res.status(200).send(buffer);
+};
     const cachedImage = shareImageCache.get(cacheKey);
 
     if (cachedImage) {
