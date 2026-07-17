@@ -4,6 +4,8 @@ const {
   generateEventShareImage,
 } = require("../services/shareImageGenerator");
 
+const shareImageCache = new Map();
+
 const ALLOWED_PLATFORMS = [
   "whatsapp",
   "instagram",
@@ -344,9 +346,7 @@ function buildOverview(
   const bestPlatform =
     Object.entries(platformCounts).sort(
       (a, b) => b[1] - a[1]
-    )[0]?.[0] || "direct_link";
-
-  const hours = [
+    )[0]?.[0] || "direct_link";  const hours = [
     ...shares,
     ...visits,
     ...qrScans,
@@ -441,9 +441,47 @@ async function getShareOverview(req, res) {
         "Failed to load share overview",
     });
   }
-}async function getShareImage(req, res) {
+}
+
+async function getShareImage(req, res) {
   try {
     const { eventId } = req.params;
+
+    const version = String(
+      req.query.v || "default"
+    );
+
+    const cacheKey =
+      `${eventId}:${version}`;
+
+    const cachedImage =
+      shareImageCache.get(cacheKey);
+
+    if (cachedImage) {
+      res.setHeader(
+        "Content-Type",
+        "image/png"
+      );
+
+      res.setHeader(
+        "Content-Length",
+        cachedImage.length
+      );
+
+      res.setHeader(
+        "Cache-Control",
+        "public, max-age=3600, s-maxage=86400"
+      );
+
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="contriba-event-${eventId}.png"`
+      );
+
+      return res
+        .status(200)
+        .send(cachedImage);
+    }
 
     const event = await getEvent(eventId);
 
@@ -499,6 +537,11 @@ async function getShareOverview(req, res) {
         eventForImage
       );
 
+    shareImageCache.set(
+      cacheKey,
+      imageBuffer
+    );
+
     res.setHeader(
       "Content-Type",
       "image/png"
@@ -511,7 +554,7 @@ async function getShareOverview(req, res) {
 
     res.setHeader(
       "Cache-Control",
-      "public, max-age=300, s-maxage=900, stale-while-revalidate=86400"
+      "public, max-age=3600, s-maxage=86400"
     );
 
     res.setHeader(
@@ -519,7 +562,9 @@ async function getShareOverview(req, res) {
       `inline; filename="contriba-event-${eventId}.png"`
     );
 
-    return res.status(200).send(imageBuffer);
+    return res
+      .status(200)
+      .send(imageBuffer);
   } catch (error) {
     console.error(
       "Share image generation error:",
@@ -592,7 +637,8 @@ async function trackShare(req, res) {
 
     return res.status(500).json({
       success: false,
-      message: "Failed to track share",
+      message:
+        "Failed to track share",
     });
   }
 }
@@ -656,7 +702,8 @@ async function trackVisit(req, res) {
 
     return res.status(500).json({
       success: false,
-      message: "Failed to track visit",
+      message:
+        "Failed to track visit",
     });
   }
 }
@@ -1007,20 +1054,15 @@ async function getShareInsights(req, res) {
         "Failed to load insights",
     });
   }
-}module.exports = {
+}
+
+module.exports = {
   getShareOverview,
-
   getShareImage,
-
   trackShare,
-
   trackVisit,
-
   trackQrScan,
-
   getShareAnalytics,
-
   getSharePromoters,
-
   getShareInsights,
 };
