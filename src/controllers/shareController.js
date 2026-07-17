@@ -447,40 +447,31 @@ async function getShareImage(req, res) {
   try {
     const { eventId } = req.params;
 
-    const version = String(
-      req.query.v || "default"
-    );
+    const version = String(req.query.v || "default");
+    const cacheKey = `${eventId}:${version}`;
 
-    const cacheKey =
-      `${eventId}:${version}`;
+    const sendImage = (buffer) => {
+      // Prevent stale cached metadata (important for social crawlers)
+      res.removeHeader("ETag");
+      res.removeHeader("Last-Modified");
 
-    const cachedImage =
-      shareImageCache.get(cacheKey);
+      res.set({
+        "Content-Type": "image/jpeg",
+        "Content-Length": buffer.length,
+        "Cache-Control":
+          "no-store, no-cache, must-revalidate, proxy-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
+        "Content-Disposition": `inline; filename="contriba-event-${eventId}.jpg`,
+      });
+
+      return res.status(200).send(buffer);
+    };
+
+    const cachedImage = shareImageCache.get(cacheKey);
 
     if (cachedImage) {
-      res.setHeader(
-        "Content-Type",
-        "image/png"
-      );
-
-      res.setHeader(
-        "Content-Length",
-        cachedImage.length
-      );
-
-      res.setHeader(
-        "Cache-Control",
-        "public, max-age=3600, s-maxage=86400"
-      );
-
-      res.setHeader(
-        "Content-Disposition",
-        `inline; filename="contriba-event-${eventId}.png"`
-      );
-
-      return res
-        .status(200)
-        .send(cachedImage);
+      return sendImage(cachedImage);
     }
 
     const event = await getEvent(eventId);
@@ -492,28 +483,24 @@ async function getShareImage(req, res) {
       });
     }
 
-    const [creator, contributions] =
-      await Promise.all([
-        getEventCreator(event.owner_id),
-        getContributions(eventId),
-      ]);
+    const [creator, contributions] = await Promise.all([
+      getEventCreator(event.owner_id),
+      getContributions(eventId),
+    ]);
 
     const paidContributions =
       successfulContributions(contributions);
 
-    const totalRaised =
-      paidContributions.reduce(
-        (sum, item) =>
-          sum + contributionAmount(item),
-        0
-      );
+    const totalRaised = paidContributions.reduce(
+      (sum, item) => sum + contributionAmount(item),
+      0
+    );
 
-    const totalContributors =
-      new Set(
-        paidContributions.map((item) =>
-          contributorName(item)
-        )
-      ).size;
+    const totalContributors = new Set(
+      paidContributions.map((item) =>
+        contributorName(item)
+      )
+    ).size;
 
     const eventForImage = {
       ...event,
@@ -533,48 +520,17 @@ async function getShareImage(req, res) {
     };
 
     const imageBuffer =
-      await generateEventShareImage(
-        eventForImage
-      );
+      await generateEventShareImage(eventForImage);
 
-    shareImageCache.set(
-      cacheKey,
-      imageBuffer
-    );
+    shareImageCache.set(cacheKey, imageBuffer);
 
-    res.setHeader(
-      "Content-Type",
-      "image/png"
-    );
-
-    res.setHeader(
-      "Content-Length",
-      imageBuffer.length
-    );
-
-    res.setHeader(
-      "Cache-Control",
-      "public, max-age=3600, s-maxage=86400"
-    );
-
-    res.setHeader(
-      "Content-Disposition",
-      `inline; filename="contriba-event-${eventId}.png"`
-    );
-
-    return res
-      .status(200)
-      .send(imageBuffer);
+    return sendImage(imageBuffer);
   } catch (error) {
-    console.error(
-      "Share image generation error:",
-      error
-    );
+    console.error("Share image generation error:", error);
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to generate event share image",
+      message: "Failed to generate event share image",
     });
   }
 }
@@ -767,7 +723,9 @@ async function trackQrScan(req, res) {
         "Failed to track QR scan",
     });
   }
-}async function getShareAnalytics(req, res) {
+}
+
+async function getShareAnalytics(req, res) {
   try {
     const { eventId } = req.params;
 

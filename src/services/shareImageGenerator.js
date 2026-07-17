@@ -390,22 +390,23 @@ if (
     */
 
     const screenshot =
-      await page.screenshot({
-        type: "png",
+  await page.screenshot({
+    type: "jpeg",
+    quality: 90,
 
-        clip: {
-          x: 0,
-          y: 0,
-          width: CARD_WIDTH,
-          height: CARD_HEIGHT,
-        },
+    clip: {
+      x: 0,
+      y: 0,
+      width: CARD_WIDTH,
+      height: CARD_HEIGHT,
+    },
 
-        captureBeyondViewport:
-          false,
+    captureBeyondViewport:
+      false,
 
-        omitBackground:
-          false,
-      });
+    omitBackground:
+      false,
+  });
 
     return Buffer.from(
       screenshot

@@ -598,7 +598,7 @@ async function getPublicSharePage(
 
             <meta
               property="og:image:type"
-              content="image/png"
+              content="image/jpeg"
             />
 
             <meta
