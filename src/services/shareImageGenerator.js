@@ -175,6 +175,7 @@ async function generateEventShareImage(
 
   const page =
     await browser.newPage();
+    await page.setCacheEnabled(false);
 
   try {
     /*
@@ -230,9 +231,9 @@ async function generateEventShareImage(
     */
 
     const shareCardUrl =
-      buildShareCardUrl(
-        event.id
-      );
+  `${buildShareCardUrl(
+    event.id
+  )}?ts=${Date.now()}`;
 
     console.log(
       "Rendering real Contriba EventCard:",
@@ -250,19 +251,19 @@ async function generateEventShareImage(
         }
       );
 
-    if (
-      !response ||
-      !response.ok()
-    ) {
-      const status =
-        response?.status();
+    const status =
+  response?.status();
 
-      throw new Error(
-        `Share card page returned status ${
-          status || "unknown"
-        }.`
-      );
-    }
+if (
+  !response ||
+  status >= 400
+) {
+  throw new Error(
+    `Share card page returned status ${
+      status || "unknown"
+    }.`
+  );
+}
 
     /*
     |--------------------------------------------------------------------------
