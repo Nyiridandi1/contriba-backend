@@ -156,25 +156,51 @@ router.delete('/:id', verifyToken, async (req, res) => {
 // ── DELETE /api/notifications ── Delete All Notifications
 router.delete('/', verifyToken, async (req, res) => {
   try {
-    const { data, error } = await supabase
+    const userId = req.user.userId;
+
+    // Find all notifications belonging to this user
+    const { data: notifications, error: findError } = await supabase
+      .from('notifications')
+      .select('id')
+      .eq('user_id', userId);
+
+    if (findError) throw findError;
+
+    if (!notifications || notifications.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No notifications found',
+        deleted_count: 0,
+      });
+    }
+
+    const ids = notifications.map((n) => n.id);
+
+    // Delete them
+    const { data: deleted, error: deleteError } = await supabase
       .from('notifications')
       .delete()
-      .eq('user_id', req.user.userId)
+      .in('id', ids)
       .select('id');
 
-    if (error) throw error;
+    if (deleteError) throw deleteError;
+
+    console.log(
+      `Deleted ${deleted?.length || 0} notifications for user ${userId}`
+    );
 
     return res.json({
       success: true,
       message: 'All notifications deleted successfully',
-      deleted_count: data?.length || 0,
+      deleted_count: deleted?.length || 0,
     });
+
   } catch (err) {
-    console.error('Delete all notifications error:', err.message);
+    console.error('Delete all notifications error:', err);
 
     return res.status(500).json({
       success: false,
-      message: 'Failed to delete notifications',
+      message: err.message,
     });
   }
 });
