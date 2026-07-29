@@ -114,10 +114,11 @@ router.get('/', async (req, res) => {
 router.get('/my-events', verifyToken, async (req, res) => {
   try {
     const { data: events, error } = await supabase
-      .from('events')
-      .select('*')
-      .eq('owner_id', req.user.userId)
-      .order('created_at', { ascending: false });
+  .from('events')
+  .select('*')
+  .eq('owner_id', req.user.userId)
+  .neq('status', 'deleted')
+  .order('created_at', { ascending: false });
 
     if (error) throw error;
 
