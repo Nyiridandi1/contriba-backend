@@ -357,9 +357,63 @@ router.get('/transactions', verifyToken, async (req, res) => {
 
     if (error) throw error;
 
+    const walletTransactions = transactions || [];
+
+    const depositReferences = walletTransactions
+      .filter((item) => item.type === 'deposit' && item.reference)
+      .map((item) => item.reference);
+
+    let contributionMap = {};
+
+    if (depositReferences.length > 0) {
+      const { data: contributions, error: contributionsError } = await supabase
+        .from('contributions')
+        .select(
+          'transaction_id, contributor_name, contributor_phone, payment_method, is_anonymous'
+        )
+        .in('transaction_id', depositReferences);
+
+      if (contributionsError) {
+        console.error(
+          'Wallet contribution enrichment error:',
+          contributionsError.message
+        );
+      } else {
+        contributionMap = (contributions || []).reduce((acc, contribution) => {
+          acc[contribution.transaction_id] = contribution;
+          return acc;
+        }, {});
+      }
+    }
+
+    const enrichedTransactions = walletTransactions.map((transaction) => {
+      if (transaction.type !== 'deposit') {
+        return transaction;
+      }
+
+      const contribution = contributionMap[transaction.reference];
+
+      if (!contribution) {
+        return transaction;
+      }
+
+      return {
+        ...transaction,
+        payment_method: contribution.payment_method || null,
+        sender_phone:
+          contribution.is_anonymous === true
+            ? null
+            : contribution.contributor_phone || null,
+        sender_name:
+          contribution.is_anonymous === true
+            ? 'Anonymous'
+            : contribution.contributor_name || 'Contributor',
+      };
+    });
+
     return res.json({
       success: true,
-      transactions: transactions || [],
+      transactions: enrichedTransactions,
     });
   } catch (err) {
     console.error('Get transactions error:', err.message);
