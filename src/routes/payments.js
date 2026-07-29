@@ -67,155 +67,144 @@ async function sendPushNotification(pushToken, title, body, data = {}) {
   }
 }
 
-// ── Calculate Fees ──
-// Flow:
-// 1. User pays: amount (e.g. RWF 1,000)
-// 2. Paypack cashin fee (3.5% MTN / 2.5% Airtel) is deducted automatically
-// 3. Remaining lands in Contriba Paypack balance
-// 4. Contriba keeps 1% profit
-// 5. Paypack cashout fee (flat RWF 200) is deducted when sending to owner
-// 6. Owner receives the rest
-function calculateFees(amount, paymentMethod = 'mtn') {
-  const cashinFeeRate     = paymentMethod === 'airtel' ? 0.025 : 0.035; // 2.5% Airtel, 3.5% MTN
-  const paypackCashinFee  = Math.ceil(amount * cashinFeeRate);
-  const afterCashin       = amount - paypackCashinFee;   // what lands in Contriba balance
-  const contribaFee       = Math.floor(afterCashin * 0.01); // Contriba 1% profit
-  const paypackCashoutFee = 200;                          // flat RWF 200
-  const ownerAmount       = afterCashin - contribaFee - paypackCashoutFee;
+// ── Calculate Contribution Wallet Credit ──
+// Contribution flow:
+// 1. Contributor pays the full amount through Paypack cashin
+// 2. Paypack cashin fee is deducted
+// 3. Contriba keeps 1% platform fee
+// 4. Remaining amount is credited to organizer Contriba Wallet
+// 5. No automatic cashout happens here
+function calculateContributionCredit(amount, paymentMethod = 'mtn') {
+  const numericAmount = Number(amount || 0);
+  const cashinFeeRate = paymentMethod === 'airtel' ? 0.025 : 0.035;
+  const paypackCashinFee = Math.ceil(numericAmount * cashinFeeRate);
+  const afterCashin = Math.max(numericAmount - paypackCashinFee, 0);
+  const contribaFee = Math.floor(afterCashin * 0.01);
+  const walletCredit = Math.max(afterCashin - contribaFee, 0);
 
-  console.log(`
-    ── Fee Breakdown ──
-    User pays:           RWF ${amount}
-    Paypack cashin fee:  RWF ${paypackCashinFee} (${cashinFeeRate * 100}%)
-    After cashin:        RWF ${afterCashin}
-    Contriba fee (1%):   RWF ${contribaFee}
-    Paypack cashout fee: RWF ${paypackCashoutFee}
-    Owner receives:      RWF ${ownerAmount}
-    Contriba profit:     RWF ${contribaFee}
-  `);
-
-  return { paypackCashinFee, afterCashin, contribaFee, paypackCashoutFee, ownerAmount };
-}
-
-// ── Auto Cashout to Event Owner ──
-async function disbursToOwner(token, ownerPhone, ownerAmount) {
-  try {
-    const formattedPhone = formatPhone(ownerPhone);
-    console.log(`Disbursing RWF ${ownerAmount} to event owner: ${formattedPhone}`);
-
-    const response = await axios.post(
-      'https://payments.paypack.rw/api/transactions/cashout',
-      {
-        amount: parseInt(ownerAmount),
-        number: formattedPhone,
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-      }
-    );
-
-    console.log(`Disbursement successful to ${formattedPhone}:`, response.data.ref);
-    return response.data;
-  } catch (err) {
-    console.error('Disbursement error:', err.response?.data || err.message);
-    return null;
-  }
+  return {
+    paypackCashinFee,
+    afterCashin,
+    contribaFee,
+    walletCredit,
+  };
 }
 
 // ── Process Successful Payment ──
 async function processSuccessfulPayment(ref) {
   try {
-    const { data: contribution } = await supabase
+    const { data: contribution, error: contributionError } = await supabase
       .from('contributions')
       .select('*')
       .eq('transaction_id', ref)
       .single();
 
-    if (!contribution || contribution.status === 'success') {
-      console.log(`Contribution ${ref} already processed or not found`);
+    if (contributionError || !contribution) {
+      console.log(`Contribution ${ref} not found`);
       return;
     }
 
-    // Mark as success
-    await supabase
-      .from('contributions')
-      .update({ status: 'success' })
-      .eq('transaction_id', ref);
+    if (contribution.status === 'success') {
+      console.log(`Contribution ${ref} already processed`);
+      return;
+    }
 
-    const { data: event } = await supabase
+    const { data: event, error: eventError } = await supabase
       .from('events')
       .select('*')
       .eq('id', contribution.event_id)
       .single();
 
-    if (!event) return;
+    if (eventError || !event) {
+      console.log(`Event not found for contribution ${ref}`);
+      return;
+    }
 
-    // ✅ Calculate fees correctly based on payment method
     const paymentMethod = contribution.payment_method || 'mtn';
-    const { contribaFee, paypackCashoutFee, ownerAmount } = calculateFees(
+    const { contribaFee, walletCredit } = calculateContributionCredit(
       contribution.amount,
       paymentMethod
     );
 
-    // Update event total raised
-    await supabase
+    const numericContributionAmount = Number(contribution.amount || 0);
+
+    const { error: contributionUpdateError } = await supabase
+      .from('contributions')
+      .update({
+        status: 'success',
+      })
+      .eq('transaction_id', ref)
+      .neq('status', 'success');
+
+    if (contributionUpdateError) throw contributionUpdateError;
+
+    const { error: eventUpdateError } = await supabase
       .from('events')
-      .update({ total_raised: (event.total_raised || 0) + contribution.amount })
+      .update({
+        total_raised: Number(event.total_raised || 0) + numericContributionAmount,
+      })
       .eq('id', contribution.event_id);
 
-    // Update owner wallet with amount after fees
-    const { data: wallet } = await supabase
+    if (eventUpdateError) throw eventUpdateError;
+
+    let { data: wallet, error: walletError } = await supabase
       .from('wallets')
       .select('*')
       .eq('user_id', event.owner_id)
       .single();
 
-    if (wallet) {
-      await supabase
-        .from('wallets')
-        .update({
-          balance: wallet.balance + ownerAmount,
-          total_in: wallet.total_in + ownerAmount,
-        })
-        .eq('user_id', event.owner_id);
+    if (walletError && walletError.code !== 'PGRST116') {
+      throw walletError;
     }
 
-    // Get owner push token for notification
+    if (!wallet) {
+      const { data: createdWallet, error: createWalletError } = await supabase
+        .from('wallets')
+        .insert({
+          user_id: event.owner_id,
+          balance: 0,
+          total_in: 0,
+          total_out: 0,
+        })
+        .select()
+        .single();
+
+      if (createWalletError) throw createWalletError;
+      wallet = createdWallet;
+    }
+
+    const { error: walletUpdateError } = await supabase
+      .from('wallets')
+      .update({
+        balance: Number(wallet.balance || 0) + walletCredit,
+        total_in: Number(wallet.total_in || 0) + walletCredit,
+      })
+      .eq('id', wallet.id);
+
+    if (walletUpdateError) throw walletUpdateError;
+
+    const { error: transactionError } = await supabase
+      .from('transactions')
+      .insert({
+        wallet_id: wallet.id,
+        type: 'deposit',
+        amount: walletCredit,
+        reference: ref,
+        status: 'success',
+      });
+
+    if (transactionError) throw transactionError;
+
     const { data: owner } = await supabase
       .from('users')
       .select('push_token, name')
       .eq('id', event.owner_id)
       .single();
 
-    // ✅ Use event.owner_phone — the MoMo number set when creating the event!
-    const receiverPhone = event.owner_phone;
-    console.log(`Sending RWF ${ownerAmount} to event owner MoMo: ${receiverPhone}`);
-
-    if (receiverPhone && ownerAmount > 0) {
-      const token = await getPaypackToken();
-      const disbursement = await disbursToOwner(token, receiverPhone, ownerAmount);
-
-      if (disbursement) {
-        await supabase
-          .from('contributions')
-          .update({ disbursement_ref: disbursement.ref })
-          .eq('transaction_id', ref);
-        console.log(`✅ Money sent to ${receiverPhone}: RWF ${ownerAmount}`);
-        console.log(`✅ Contriba profit: RWF ${contribaFee}`);
-      }
-    } else {
-      console.log(`No receiver phone set for event ${event.id} or amount too low`);
-    }
-
-    // Send notification to event owner
     await supabase.from('notifications').insert({
       user_id: event.owner_id,
       title: 'New Contribution Received! 💸',
-      message: `${contribution.contributor_name || 'Someone'} contributed RWF ${contribution.amount.toLocaleString()} to "${event.title}". RWF ${ownerAmount.toLocaleString()} sent to ${receiverPhone}.`,
+      message: `${contribution.contributor_name || 'Someone'} contributed RWF ${numericContributionAmount.toLocaleString()} to "${event.title}". RWF ${walletCredit.toLocaleString()} is now available in your Contriba Wallet.`,
       type: 'contribution',
     });
 
@@ -223,23 +212,27 @@ async function processSuccessfulPayment(ref) {
       await sendPushNotification(
         owner.push_token,
         'New Contribution! 💸',
-        `${contribution.contributor_name || 'Someone'} contributed RWF ${contribution.amount.toLocaleString()}! RWF ${ownerAmount.toLocaleString()} sent to your MoMo!`,
+        `${contribution.contributor_name || 'Someone'} contributed RWF ${numericContributionAmount.toLocaleString()}! RWF ${walletCredit.toLocaleString()} was added to your Contriba Wallet.`,
         { type: 'contribution', event_id: contribution.event_id }
       );
     }
 
-    // Goal notifications
-    const newTotal = (event.total_raised || 0) + contribution.amount;
-    const goalPercent = event.goal_amount > 0
-      ? Math.round((newTotal / event.goal_amount) * 100) : 0;
+    const newTotal = Number(event.total_raised || 0) + numericContributionAmount;
+    const goalPercent = Number(event.goal_amount || 0) > 0
+      ? Math.round((newTotal / Number(event.goal_amount)) * 100)
+      : 0;
 
-    if (goalPercent >= 100 && event.total_raised < event.goal_amount) {
+    if (
+      goalPercent >= 100 &&
+      Number(event.total_raised || 0) < Number(event.goal_amount || 0)
+    ) {
       await supabase.from('notifications').insert({
         user_id: event.owner_id,
         title: 'Goal Reached! 🎉',
         message: `Congratulations! Your event "${event.title}" has reached its goal!`,
         type: 'goal_reached',
       });
+
       if (owner?.push_token) {
         await sendPushNotification(
           owner.push_token,
@@ -248,18 +241,18 @@ async function processSuccessfulPayment(ref) {
           { type: 'goal_reached', event_id: event.id }
         );
       }
-    } else if (goalPercent >= 80 && goalPercent < 100) {
-      if (owner?.push_token) {
-        await sendPushNotification(
-          owner.push_token,
-          'Almost There!',
-          `"${event.title}" is ${goalPercent}% funded! Keep sharing!`,
-          { type: 'milestone', event_id: event.id }
-        );
-      }
+    } else if (goalPercent >= 80 && goalPercent < 100 && owner?.push_token) {
+      await sendPushNotification(
+        owner.push_token,
+        'Almost There!',
+        `"${event.title}" is ${goalPercent}% funded! Keep sharing!`,
+        { type: 'milestone', event_id: event.id }
+      );
     }
 
-    console.log(`✅ Payment ${ref} fully processed!`);
+    console.log(
+      `Payment ${ref} processed. Wallet credited RWF ${walletCredit}. Contriba fee RWF ${contribaFee}.`
+    );
   } catch (err) {
     console.error('Process payment error:', err.message);
   }
@@ -373,94 +366,13 @@ router.get('/status/:ref', async (req, res) => {
 });
 
 // ── POST /api/payments/cashout ──
+// Legacy endpoint retained only to prevent two separate withdrawal implementations.
+// Use POST /api/wallet/withdraw for organizer withdrawals.
 router.post('/cashout', verifyToken, async (req, res) => {
-  try {
-    const { amount, phone } = req.body;
-
-    if (!amount || !phone) {
-      return res.status(400).json({
-        success: false,
-        message: 'Amount and phone are required',
-      });
-    }
-
-    const { data: wallet } = await supabase
-      .from('wallets')
-      .select('*')
-      .eq('user_id', req.user.userId)
-      .single();
-
-    if (!wallet || wallet.balance < amount) {
-      return res.status(400).json({
-        success: false,
-        message: 'Insufficient balance',
-      });
-    }
-
-    const formattedPhone = formatPhone(phone);
-    const token = await getPaypackToken();
-
-    const response = await axios.post(
-      'https://payments.paypack.rw/api/transactions/cashout',
-      {
-        amount: parseInt(amount),
-        number: formattedPhone,
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-      }
-    );
-
-    const transaction = response.data;
-
-    await supabase
-      .from('wallets')
-      .update({
-        balance: wallet.balance - amount,
-        total_out: wallet.total_out + amount,
-      })
-      .eq('user_id', req.user.userId);
-
-    await supabase.from('transactions').insert({
-      wallet_id: wallet.id,
-      type: 'out',
-      amount,
-      reference: transaction.ref,
-      status: 'pending',
-    });
-
-    const { data: user } = await supabase
-      .from('users')
-      .select('push_token')
-      .eq('id', req.user.userId)
-      .single();
-
-    if (user?.push_token) {
-      await sendPushNotification(
-        user.push_token,
-        'Withdrawal Initiated!',
-        `RWF ${parseInt(amount).toLocaleString()} will be sent to your phone shortly!`,
-        { type: 'withdrawal' }
-      );
-    }
-
-    res.json({
-      success: true,
-      message: 'Withdrawal initiated! Money will be sent to your phone.',
-      transaction_ref: transaction.ref,
-    });
-
-  } catch (err) {
-    console.error('Cashout error:', err.response?.data || err.message);
-    res.status(500).json({
-      success: false,
-      message: err.response?.data?.message || 'Withdrawal failed',
-    });
-  }
+  return res.status(410).json({
+    success: false,
+    message: 'Withdrawal endpoint moved to /api/wallet/withdraw.',
+  });
 });
 
 // ── POST /api/payments/webhook ──
