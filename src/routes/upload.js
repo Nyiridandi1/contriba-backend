@@ -290,70 +290,52 @@ async function buildPerceptualPair(
 async function buildRegionHashes(
   normalizedBuffer
 ) {
-  const regions = [
-    {
-      name: "center",
-      left: 96,
-      top: 96,
-      width: 320,
-      height: 320,
-    },
+  /*
+    Dense multi-scale overlapping crop fingerprints.
 
-    {
-      name: "top_left",
-      left: 0,
-      top: 0,
-      width: 320,
-      height: 320,
-    },
+    This is stronger than the old five-region system because it
+    fingerprints many overlapping windows across the whole image.
+  */
 
-    {
-      name: "top_right",
-      left: 192,
-      top: 0,
-      width: 320,
-      height: 320,
-    },
-
-    {
-      name: "bottom_left",
-      left: 0,
-      top: 192,
-      width: 320,
-      height: 320,
-    },
-
-    {
-      name: "bottom_right",
-      left: 192,
-      top: 192,
-      width: 320,
-      height: 320,
-    },
-  ];
-
+  const windowSizes = [384, 320, 256, 192, 160];
   const hashes = [];
 
-  for (const region of regions) {
-    const regionBuffer =
-      await sharp(normalizedBuffer)
-        .extract({
-          left: region.left,
-          top: region.top,
-          width: region.width,
-          height: region.height,
-        })
-        .toBuffer();
+  for (const size of windowSizes) {
+    const step = Math.max(64, Math.floor(size / 2));
+    const positions = [];
 
-    const pair =
-      await buildPerceptualPair(
-        regionBuffer
-      );
+    for (let pos = 0; pos <= 512 - size; pos += step) {
+      positions.push(pos);
+    }
 
-    hashes.push({
-      name: region.name,
-      ...pair,
-    });
+    const last = 512 - size;
+
+    if (!positions.includes(last)) {
+      positions.push(last);
+    }
+
+    for (const top of positions) {
+      for (const left of positions) {
+        const regionBuffer = await sharp(normalizedBuffer)
+          .extract({
+            left,
+            top,
+            width: size,
+            height: size,
+          })
+          .toBuffer();
+
+        const pair = await buildPerceptualPair(regionBuffer);
+
+        hashes.push({
+          name: `tile_${size}_${left}_${top}`,
+          size,
+          left,
+          top,
+          ...pair,
+        });
+      }
+    }
   }
 
   return hashes;
@@ -552,14 +534,9 @@ function isStrongRegionMatch(
       pairB.dhash
     );
 
-  /*
-    Region comparisons use a
-    stricter threshold.
-  */
-
   return (
-    aDistance <= 4 &&
-    dDistance <= 6
+    aDistance <= 3 &&
+    dDistance <= 5
   );
 }
 
@@ -629,6 +606,32 @@ async function getFingerprintsFromOtherOwners(
   }
 
   return fingerprints;
+}
+
+function countRegionMatches(
+  newRegions,
+  storedRegions
+) {
+  let matches = 0;
+
+  for (const newRegion of newRegions) {
+    for (const storedRegion of storedRegions) {
+      if (
+        isStrongRegionMatch(
+          newRegion,
+          storedRegion
+        )
+      ) {
+        matches += 1;
+
+        if (matches >= 2) {
+          return matches;
+        }
+      }
+    }
+  }
+
+  return matches;
 }
 
 /* =========================================================
@@ -741,31 +744,22 @@ function findProtectedImageMatch(
     }
 
     /* ---------------------------------
-       5. REGION-TO-REGION MATCH
+       5. DENSE REGION-TO-REGION MATCH
     --------------------------------- */
 
-    for (
-      const newRegion
-      of newRegions
-    ) {
-      for (
-        const storedRegion
-        of storedRegions
-      ) {
-        if (
-          isStrongRegionMatch(
-            newRegion,
-            storedRegion
-          )
-        ) {
-          return {
-            matched: true,
-            reason: "regional",
-            fingerprintId:
-              existing.id,
-          };
-        }
-      }
+    const corroboratingMatches =
+      countRegionMatches(
+        newRegions,
+        storedRegions
+      );
+
+    if (corroboratingMatches >= 2) {
+      return {
+        matched: true,
+        reason: "cropped_partial",
+        fingerprintId:
+          existing.id,
+      };
     }
   }
 
