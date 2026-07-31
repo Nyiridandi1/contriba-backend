@@ -9,6 +9,381 @@ const supabase = require("../config/database");
 const router = express.Router();
 
 /* =========================================================
+   DEEP IMAGE EMBEDDING PROTECTION
+
+   Transformers.js is ESM-only, while this backend uses CommonJS.
+   We load it lazily with import() and keep one model instance
+   in memory for all later uploads.
+
+   The first protected upload after a fresh deployment can take
+   longer because Railway may need to download/cache the model.
+========================================================= */
+
+const EMBEDDING_MODEL = "Xenova/clip-vit-base-patch32";
+const EMBEDDING_FULL_THRESHOLD = 0.94;
+const EMBEDDING_REGION_THRESHOLD = 0.93;
+const EMBEDDING_VERY_STRONG_THRESHOLD = 0.965;
+
+let embeddingPipelinePromise = null;
+
+async function getEmbeddingPipeline() {
+  if (!embeddingPipelinePromise) {
+    embeddingPipelinePromise = (async () => {
+      const { pipeline } = await import("@huggingface/transformers");
+
+      console.log(
+        `Loading Contriba image-security model: ${EMBEDDING_MODEL}`
+      );
+
+      const extractor = await pipeline(
+        "image-feature-extraction",
+        EMBEDDING_MODEL,
+        {
+          dtype: "q8",
+        }
+      );
+
+      console.log("Contriba image-security model ready.");
+
+      return extractor;
+    })().catch((error) => {
+      embeddingPipelinePromise = null;
+      throw error;
+    });
+  }
+
+  return embeddingPipelinePromise;
+}
+
+function l2Normalize(values) {
+  const array = Array.from(values || [], Number);
+
+  let sumSquares = 0;
+
+  for (const value of array) {
+    sumSquares += value * value;
+  }
+
+  const magnitude = Math.sqrt(sumSquares);
+
+  if (!Number.isFinite(magnitude) || magnitude === 0) {
+    return [];
+  }
+
+  return array.map((value) => value / magnitude);
+}
+
+function cosineSimilarity(vectorA, vectorB) {
+  if (
+    !Array.isArray(vectorA) ||
+    !Array.isArray(vectorB) ||
+    vectorA.length === 0 ||
+    vectorA.length !== vectorB.length
+  ) {
+    return -1;
+  }
+
+  let dot = 0;
+
+  for (let i = 0; i < vectorA.length; i += 1) {
+    dot += Number(vectorA[i]) * Number(vectorB[i]);
+  }
+
+  return dot;
+}
+
+async function bufferToRawImage(buffer) {
+  const { RawImage } = await import(
+    "@huggingface/transformers"
+  );
+
+  const blob = new Blob(
+    [buffer],
+    { type: "image/jpeg" }
+  );
+
+  return RawImage.fromBlob(blob);
+}
+
+async function createDeepEmbedding(buffer) {
+  const extractor = await getEmbeddingPipeline();
+  const rawImage = await bufferToRawImage(buffer);
+
+  const output = await extractor(rawImage);
+
+  return l2Normalize(output.data);
+}
+
+/*
+  Build meaningful multi-scale crops for the deep model.
+
+  We intentionally do not create dozens of CLIP embeddings per image:
+  that would make every upload extremely slow and expensive.
+
+  These regions provide strong coverage for screenshots and crops:
+  - full image
+  - center 75%
+  - four overlapping 62.5% quadrants
+  - nine overlapping 50% tiles
+*/
+async function buildEmbeddingRegions(normalizedBuffer) {
+  const regions = [
+    {
+      name: "center_384",
+      left: 64,
+      top: 64,
+      width: 384,
+      height: 384,
+    },
+
+    {
+      name: "q1_320",
+      left: 0,
+      top: 0,
+      width: 320,
+      height: 320,
+    },
+    {
+      name: "q2_320",
+      left: 192,
+      top: 0,
+      width: 320,
+      height: 320,
+    },
+    {
+      name: "q3_320",
+      left: 0,
+      top: 192,
+      width: 320,
+      height: 320,
+    },
+    {
+      name: "q4_320",
+      left: 192,
+      top: 192,
+      width: 320,
+      height: 320,
+    },
+  ];
+
+  const tilePositions = [0, 128, 256];
+
+  for (const top of tilePositions) {
+    for (const left of tilePositions) {
+      regions.push({
+        name: `tile_256_${left}_${top}`,
+        left,
+        top,
+        width: 256,
+        height: 256,
+      });
+    }
+  }
+
+  const output = [];
+
+  for (const region of regions) {
+    const regionBuffer = await sharp(normalizedBuffer)
+      .extract({
+        left: region.left,
+        top: region.top,
+        width: region.width,
+        height: region.height,
+      })
+      .jpeg({
+        quality: 90,
+        chromaSubsampling: "4:4:4",
+      })
+      .toBuffer();
+
+    const embedding = await createDeepEmbedding(
+      regionBuffer
+    );
+
+    output.push({
+      name: region.name,
+      embedding,
+    });
+  }
+
+  return output;
+}
+
+async function createDeepImageFingerprint(
+  normalizedBuffer
+) {
+  const full = await createDeepEmbedding(
+    normalizedBuffer
+  );
+
+  const regions = await buildEmbeddingRegions(
+    normalizedBuffer
+  );
+
+  return {
+    model: EMBEDDING_MODEL,
+    full,
+    regions,
+  };
+}
+
+function normalizeStoredEmbedding(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === "object") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function findDeepEmbeddingMatch(
+  newEmbedding,
+  storedEmbedding
+) {
+  if (
+    !newEmbedding ||
+    !storedEmbedding ||
+    newEmbedding.model !== storedEmbedding.model
+  ) {
+    return {
+      matched: false,
+      score: -1,
+      reason: null,
+    };
+  }
+
+  const fullScore = cosineSimilarity(
+    newEmbedding.full,
+    storedEmbedding.full
+  );
+
+  if (fullScore >= EMBEDDING_FULL_THRESHOLD) {
+    return {
+      matched: true,
+      score: fullScore,
+      reason: "deep_full",
+    };
+  }
+
+  const newRegions = Array.isArray(
+    newEmbedding.regions
+  )
+    ? newEmbedding.regions
+    : [];
+
+  const storedRegions = Array.isArray(
+    storedEmbedding.regions
+  )
+    ? storedEmbedding.regions
+    : [];
+
+  let bestScore = fullScore;
+  let strongRegionMatches = 0;
+
+  /*
+    A crop uploaded as a complete new image can closely resemble
+    one stored region, so compare full <-> region in both directions.
+  */
+  for (const storedRegion of storedRegions) {
+    const score = cosineSimilarity(
+      newEmbedding.full,
+      storedRegion.embedding
+    );
+
+    bestScore = Math.max(bestScore, score);
+
+    if (score >= EMBEDDING_VERY_STRONG_THRESHOLD) {
+      return {
+        matched: true,
+        score,
+        reason: "deep_crop",
+      };
+    }
+
+    if (score >= EMBEDDING_REGION_THRESHOLD) {
+      strongRegionMatches += 1;
+    }
+  }
+
+  for (const newRegion of newRegions) {
+    const score = cosineSimilarity(
+      newRegion.embedding,
+      storedEmbedding.full
+    );
+
+    bestScore = Math.max(bestScore, score);
+
+    if (score >= EMBEDDING_VERY_STRONG_THRESHOLD) {
+      return {
+        matched: true,
+        score,
+        reason: "deep_crop",
+      };
+    }
+
+    if (score >= EMBEDDING_REGION_THRESHOLD) {
+      strongRegionMatches += 1;
+    }
+  }
+
+  /*
+    Region-to-region comparison catches screenshots and arbitrary crops.
+
+    One extremely strong match blocks immediately.
+    Otherwise we require at least two strong matches to reduce
+    false positives between merely similar-looking photos.
+  */
+  for (const newRegion of newRegions) {
+    for (const storedRegion of storedRegions) {
+      const score = cosineSimilarity(
+        newRegion.embedding,
+        storedRegion.embedding
+      );
+
+      bestScore = Math.max(bestScore, score);
+
+      if (score >= EMBEDDING_VERY_STRONG_THRESHOLD) {
+        return {
+          matched: true,
+          score,
+          reason: "deep_partial",
+        };
+      }
+
+      if (score >= EMBEDDING_REGION_THRESHOLD) {
+        strongRegionMatches += 1;
+
+        if (strongRegionMatches >= 2) {
+          return {
+            matched: true,
+            score: bestScore,
+            reason: "deep_partial",
+          };
+        }
+      }
+    }
+  }
+
+  return {
+    matched: false,
+    score: bestScore,
+    reason: null,
+  };
+}
+
+
+/* =========================================================
    MULTER
 ========================================================= */
 
@@ -351,15 +726,28 @@ async function createImageFingerprint(
   const normalizedBuffer =
     await createNormalizedImage(buffer);
 
+  /*
+    Run the cheap classical fingerprints first, while the deep
+    embedding system performs its stronger visual analysis.
+
+    The deep fingerprint contains:
+    - full-image CLIP embedding
+    - multiple crop-region CLIP embeddings
+  */
   const [
     fullPair,
     regionHashes,
+    imageEmbedding,
   ] = await Promise.all([
     buildPerceptualPair(
       normalizedBuffer
     ),
 
     buildRegionHashes(
+      normalizedBuffer
+    ),
+
+    createDeepImageFingerprint(
       normalizedBuffer
     ),
   ]);
@@ -372,6 +760,9 @@ async function createImageFingerprint(
 
     region_hashes:
       regionHashes,
+
+    image_embedding:
+      imageEmbedding,
 
     fullPair,
   };
@@ -576,6 +967,7 @@ async function getFingerprintsFromOtherOwners(
           sha256_hash,
           visual_hash,
           region_hashes,
+          image_embedding,
           created_at
         `)
         .neq(
@@ -684,6 +1076,47 @@ function findProtectedImageMatch(
         fingerprintId:
           existing.id,
       };
+    }
+
+    /* ---------------------------------
+       3. DEEP VISUAL EMBEDDING MATCH
+
+       This layer is designed for:
+       - screenshots
+       - arbitrary crops
+       - resize/recompression
+       - mild visual edits
+
+       Older fingerprint records created before this feature may
+       not have image_embedding yet. Those safely fall back to
+       the classical protection below.
+    --------------------------------- */
+
+    const storedDeepEmbedding =
+      normalizeStoredEmbedding(
+        existing.image_embedding
+      );
+
+    if (
+      newFingerprint.image_embedding &&
+      storedDeepEmbedding
+    ) {
+      const deepMatch =
+        findDeepEmbeddingMatch(
+          newFingerprint.image_embedding,
+          storedDeepEmbedding
+        );
+
+      if (deepMatch.matched) {
+        return {
+          matched: true,
+          reason: deepMatch.reason,
+          similarity:
+            deepMatch.score,
+          fingerprintId:
+            existing.id,
+        };
+      }
     }
 
     const storedRegions =
@@ -837,6 +1270,9 @@ async function saveImageFingerprint({
 
         region_hashes:
           fingerprint.region_hashes,
+
+        image_embedding:
+          fingerprint.image_embedding,
       });
 
   if (error) {
@@ -968,8 +1404,13 @@ router.post(
       if (
         protection.match.matched
       ) {
+        const similarityText =
+          typeof protection.match.similarity === "number"
+            ? ` | similarity=${protection.match.similarity.toFixed(4)}`
+            : "";
+
         console.warn(
-          `Blocked protected event photo for user ${req.user.userId}. Match type: ${protection.match.reason}`
+          `Blocked protected event photo for user ${req.user.userId}. Match type: ${protection.match.reason}${similarityText}`
         );
 
         return res
@@ -981,7 +1422,7 @@ router.post(
               "EVENT_PHOTO_ALREADY_USED",
 
             message:
-              "This photo is already associated with another Contriba organizer. Please use an original event photo.",
+              "This photo, screenshot, or cropped version appears to already be associated with another Contriba organizer. Please use an original event photo.",
           });
       }
 

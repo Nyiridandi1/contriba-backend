@@ -13,6 +13,7 @@
     "dev": "nodemon src/index.js"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "@supabase/supabase-js": "^2.108.1",
     "axios": "^1.17.0",
     "bcryptjs": "^2.4.3",
