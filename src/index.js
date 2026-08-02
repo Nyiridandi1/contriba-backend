@@ -23,6 +23,8 @@ app.use('/api/upload', require('./routes/upload'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/share', require('./routes/share'));
 app.use('/share', require('./routes/publicShare'));
+app.use('/api/kyc', require('./routes/kyc'));
+app.use("/api/admin/kyc", require("./routes/adminKyc"));
 
 // ── TEST ROUTE ──
 app.get('/', (req, res) => {

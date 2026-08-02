@@ -179,10 +179,16 @@ router.get('/:id', async (req, res) => {
 
     // ✅ Fetch creator profile
     const { data: creator } = await supabase
-      .from('users')
-      .select('id, name, phone, avatar_url')
-      .eq('id', event.owner_id)
-      .single();
+  .from("users")
+  .select(`
+    id,
+    name,
+    phone,
+    avatar_url,
+    kyc_status
+  `)
+  .eq("id", event.owner_id)
+  .single();
 
     const { data: contributions } = await supabase
       .from('contributions')
