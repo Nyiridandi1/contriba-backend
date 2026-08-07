@@ -24,6 +24,7 @@ router.post('/', verifyToken, async (req, res) => {
       goal_amount, owner_phone, owner_payment_method,
       cover_image, photo2_url, photo3_url, photo4_url,
       is_private, // ✅ new field
+      show_raised_amount,
     } = req.body;
 
     if (!title) return res.status(400).json({ success: false, message: 'Event title is required' });
@@ -46,6 +47,7 @@ router.post('/', verifyToken, async (req, res) => {
         photo3_url: photo3_url || null,
         photo4_url: photo4_url || null,
         is_private: is_private || false, // ✅ save privacy setting
+        show_raised_amount: show_raised_amount !== false,
       })
       .select()
       .single();
@@ -96,7 +98,7 @@ router.get('/', async (req, res) => {
 
       return {
         ...event,
-        total_raised: totalRaised,
+        total_raised: event.show_raised_amount === false ? null : totalRaised,
         total_contributors: successfulContributions.length,
       };
     });
@@ -220,7 +222,7 @@ router.get('/:id', async (req, res) => {
       success: true,
       event: {
         ...event,
-        total_raised: totalRaised,
+        total_raised: event.show_raised_amount === false ? null : totalRaised,
         total_contributors: totalContributors,
         total_likes: likesCount || 0,
         creator: creator || null,
@@ -273,6 +275,7 @@ router.put('/:id', verifyToken, async (req, res) => {
       goal_amount, owner_phone, owner_payment_method,
       cover_image, photo2_url, photo3_url, photo4_url,
       is_private, // ✅ allow updating privacy
+      show_raised_amount,
     } = req.body;
 
     const { data: event, error } = await supabase
@@ -282,6 +285,9 @@ router.put('/:id', verifyToken, async (req, res) => {
         goal_amount, owner_phone, owner_payment_method,
         cover_image, photo2_url, photo3_url, photo4_url,
         is_private: is_private || false, // ✅ update privacy
+        ...(show_raised_amount !== undefined
+          ? { show_raised_amount: Boolean(show_raised_amount) }
+          : {}),
       })
       .eq('id', id)
       .eq('owner_id', req.user.userId)
