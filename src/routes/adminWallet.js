@@ -1,5 +1,6 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
+const axios = require("axios");
 
 const supabase = require("../config/database");
 
@@ -7,6 +8,7 @@ const router = express.Router();
 
 const KIGALI_TIMEZONE = "Africa/Kigali";
 const KIGALI_OFFSET = "+02:00";
+const MINIMUM_WITHDRAWAL = 5000;
 
 /* =========================================================
    AUTHENTICATION
@@ -378,6 +380,231 @@ async function enrichTransactions(
   }));
 }
 
+async function getPaypackToken() {
+  const response = await axios.post(
+    "https://payments.paypack.rw/api/auth/agents/authorize",
+    {
+      client_id: process.env.PAYPACK_CLIENT_ID,
+      client_secret: process.env.PAYPACK_CLIENT_SECRET,
+    },
+    {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  return response.data.access;
+}
+
+function formatPhone(phone) {
+  if (!phone) {
+    return "";
+  }
+
+  const clean = String(phone).replace(/[\s-]/g, "");
+
+  if (clean.startsWith("+250")) {
+    return `250${clean.slice(4)}`;
+  }
+
+  if (clean.startsWith("0")) {
+    return `250${clean.slice(1)}`;
+  }
+
+  if (clean.startsWith("250")) {
+    return clean;
+  }
+
+  return clean;
+}
+
+async function getPaypackCashoutStatus(
+  reference,
+  token
+) {
+  try {
+    const response = await axios.get(
+      `https://payments.paypack.rw/api/events/transactions?ref=${encodeURIComponent(
+        reference
+      )}&kind=CASHOUT`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/json",
+        },
+      }
+    );
+
+    const transactions =
+      response.data?.transactions || [];
+
+    const processedEvent = transactions.find(
+      (item) =>
+        item.event_kind === "transaction:processed" &&
+        item.data?.ref === reference &&
+        item.data?.kind === "CASHOUT"
+    );
+
+    const status = String(
+      processedEvent?.data?.status || "pending"
+    ).toLowerCase();
+
+    if (
+      status === "successful" ||
+      status === "success"
+    ) {
+      return {
+        status: "success",
+        paypack: processedEvent?.data || null,
+      };
+    }
+
+    if (status === "failed") {
+      return {
+        status: "failed",
+        paypack: processedEvent?.data || null,
+      };
+    }
+
+    return {
+      status: "pending",
+      paypack: processedEvent?.data || null,
+    };
+  } catch (error) {
+    console.error(
+      `Admin Paypack withdrawal status check failed for ${reference}:`,
+      error.response?.data || error.message
+    );
+
+    return {
+      status: "pending",
+      paypack: null,
+    };
+  }
+}
+
+async function syncPendingPlatformWithdrawals() {
+  const { data: pending, error: pendingError } =
+    await supabase
+      .from("platform_transactions")
+      .select("*")
+      .eq("type", "withdrawal")
+      .eq("status", "pending");
+
+  if (pendingError) {
+    throw pendingError;
+  }
+
+  if (!pending || pending.length === 0) {
+    return;
+  }
+
+  const paypackToken = await getPaypackToken();
+
+  for (const transaction of pending) {
+    if (!transaction.reference) {
+      continue;
+    }
+
+    const result = await getPaypackCashoutStatus(
+      transaction.reference,
+      paypackToken
+    );
+
+    if (result.status === "success") {
+      const {
+        data: updatedRows,
+        error: updateError,
+      } = await supabase
+        .from("platform_transactions")
+        .update({
+          status: "success",
+        })
+        .eq("id", transaction.id)
+        .eq("status", "pending")
+        .select("id");
+
+      if (updateError) {
+        console.error(
+          `Failed to complete platform withdrawal ${transaction.reference}:`,
+          updateError.message
+        );
+        continue;
+      }
+
+      if (updatedRows && updatedRows.length > 0) {
+        const wallet = await getPlatformWallet();
+
+        const { error: walletUpdateError } =
+          await supabase
+            .from("platform_wallet")
+            .update({
+              total_withdrawn:
+                toSafeNumber(wallet.total_withdrawn) +
+                toSafeNumber(transaction.amount),
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", wallet.id);
+
+        if (walletUpdateError) {
+          console.error(
+            `Failed to update total withdrawn for ${transaction.reference}:`,
+            walletUpdateError.message
+          );
+        }
+      }
+
+      continue;
+    }
+
+    if (result.status === "failed") {
+      const {
+        data: updatedRows,
+        error: failUpdateError,
+      } = await supabase
+        .from("platform_transactions")
+        .update({
+          status: "failed",
+        })
+        .eq("id", transaction.id)
+        .eq("status", "pending")
+        .select("id");
+
+      if (failUpdateError) {
+        console.error(
+          `Failed to mark platform withdrawal ${transaction.reference} failed:`,
+          failUpdateError.message
+        );
+        continue;
+      }
+
+      if (!updatedRows || updatedRows.length === 0) {
+        continue;
+      }
+
+      const wallet = await getPlatformWallet();
+
+      const { error: refundError } = await supabase
+        .from("platform_wallet")
+        .update({
+          balance:
+            toSafeNumber(wallet.balance) +
+            toSafeNumber(transaction.amount),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", wallet.id);
+
+      if (refundError) {
+        console.error(
+          `Failed to refund platform withdrawal ${transaction.reference}:`,
+          refundError.message
+        );
+      }
+    }
+  }
+}
+
 /* =========================================================
    GET /api/admin/wallet
 
@@ -398,6 +625,7 @@ router.get(
   requireAdmin,
   async (req, res) => {
     try {
+      await syncPendingPlatformWithdrawals();
       const wallet = await getPlatformWallet();
 
       const {
@@ -493,6 +721,7 @@ router.get(
 
           currency: "RWF",
           timezone: KIGALI_TIMEZONE,
+          minimum_withdrawal: MINIMUM_WITHDRAWAL,
         },
 
         recent_transactions:
@@ -733,15 +962,213 @@ router.get(
 );
 
 /* =========================================================
-   WITHDRAWALS
+   POST /api/admin/wallet/withdraw
 
-   Intentionally NOT implemented in this file yet.
-
-   First we verify that Admin Center reads the correct
-   platform wallet balance and fee ledger safely.
-
-   The withdrawal endpoint will be added only after the
-   read-only wallet is confirmed working.
+   Withdraw ONLY Contriba platform-fee profit.
+   Organizer wallets are never touched by this endpoint.
 ========================================================= */
+
+router.post(
+  "/withdraw",
+  verifyToken,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const amount = Number(req.body.amount || 0);
+      const method = String(
+        req.body.method ||
+          req.body.payment_method ||
+          ""
+      )
+        .trim()
+        .toLowerCase();
+
+      const phone =
+        req.body.phone ||
+        req.body.phone_number ||
+        "";
+
+      if (!amount || !method || !phone) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Amount, payment method and phone number are required.",
+        });
+      }
+
+      if (!Number.isInteger(amount) || amount <= 0) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Withdrawal amount must be a whole number greater than zero.",
+        });
+      }
+
+      if (amount < MINIMUM_WITHDRAWAL) {
+        return res.status(400).json({
+          success: false,
+          message: `Minimum withdrawal is RWF ${MINIMUM_WITHDRAWAL.toLocaleString()}.`,
+        });
+      }
+
+      if (!["mtn", "airtel"].includes(method)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Please choose MTN MoMo or Airtel Money.",
+        });
+      }
+
+      const formattedPhone = formatPhone(phone);
+
+      if (!/^2507\d{8}$/.test(formattedPhone)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Please enter a valid Rwanda mobile money number.",
+        });
+      }
+
+      // Resolve any older pending cash-outs before
+      // checking the spendable platform balance.
+      await syncPendingPlatformWithdrawals();
+
+      const wallet = await getPlatformWallet();
+      const availableBalance =
+        toSafeNumber(wallet.balance);
+
+      if (availableBalance < amount) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Insufficient platform wallet balance.",
+        });
+      }
+
+      const paypackToken = await getPaypackToken();
+
+      const response = await axios.post(
+        "https://payments.paypack.rw/api/transactions/cashout",
+        {
+          amount,
+          number: formattedPhone,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${paypackToken}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "Idempotency-Key":
+              `admin-wd-${Date.now()}-${req.admin.id}`
+                .replace(/[^a-zA-Z0-9-]/g, "")
+                .slice(0, 32),
+          },
+        }
+      );
+
+      const paypackTransaction = response.data;
+
+      if (!paypackTransaction?.ref) {
+        return res.status(502).json({
+          success: false,
+          message:
+            "Paypack did not return a withdrawal reference.",
+        });
+      }
+
+      const initialStatus =
+        String(
+          paypackTransaction.status || ""
+        ).toLowerCase() === "successful"
+          ? "success"
+          : "pending";
+
+      const newBalance =
+        availableBalance - amount;
+
+      // Reserve/deduct the amount immediately so the
+      // same platform balance cannot be withdrawn twice.
+      const { error: walletUpdateError } =
+        await supabase
+          .from("platform_wallet")
+          .update({
+            balance: newBalance,
+            total_withdrawn:
+              initialStatus === "success"
+                ? toSafeNumber(
+                    wallet.total_withdrawn
+                  ) + amount
+                : toSafeNumber(
+                    wallet.total_withdrawn
+                  ),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", wallet.id);
+
+      if (walletUpdateError) {
+        throw walletUpdateError;
+      }
+
+      const {
+        data: transaction,
+        error: transactionError,
+      } = await supabase
+        .from("platform_transactions")
+        .insert({
+          type: "withdrawal",
+          amount,
+          reference: paypackTransaction.ref,
+          status: initialStatus,
+          description:
+            `Admin platform withdrawal to ${formattedPhone} via ${method.toUpperCase()}`,
+        })
+        .select()
+        .single();
+
+      if (transactionError) {
+        // The Paypack request already exists. Restore the
+        // local reserved balance if ledger recording fails.
+        await supabase
+          .from("platform_wallet")
+          .update({
+            balance: availableBalance,
+            total_withdrawn:
+              toSafeNumber(wallet.total_withdrawn),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", wallet.id);
+
+        throw transactionError;
+      }
+
+      return res.json({
+        success: true,
+        message:
+          initialStatus === "success"
+            ? "Platform withdrawal completed successfully."
+            : "Platform withdrawal initiated. Check the mobile money account.",
+        transaction,
+        transaction_ref:
+          paypackTransaction.ref,
+        status: initialStatus,
+        new_balance: newBalance,
+        minimum_withdrawal:
+          MINIMUM_WITHDRAWAL,
+      });
+    } catch (error) {
+      console.error(
+        "Admin platform withdrawal error:",
+        error.response?.data || error.message
+      );
+
+      return res.status(500).json({
+        success: false,
+        message:
+          error.response?.data?.message ||
+          "Failed to process platform withdrawal.",
+      });
+    }
+  }
+);
 
 module.exports = router;
