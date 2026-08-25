@@ -24,7 +24,8 @@ app.use('/api/settings', require('./routes/settings'));
 app.use('/api/share', require('./routes/share'));
 app.use('/share', require('./routes/publicShare'));
 app.use('/api/kyc', require('./routes/kyc'));
-app.use("/api/admin/kyc", require("./routes/adminKyc"));
+app.use('/api/admin/kyc', require('./routes/adminKyc'));
+app.use('/api/admin/wallet', require('./routes/adminWallet'));
 
 // ── TEST ROUTE ──
 app.get('/', (req, res) => {
@@ -69,6 +70,12 @@ app.get('/', (req, res) => {
       'GET  /api/share/analytics/:eventId',
       'GET  /api/share/promoters/:eventId',
       'GET  /api/share/insights/:eventId',
+
+      'GET  /api/admin/kyc/me',
+      'GET  /api/admin/kyc/submissions',
+      'GET  /api/admin/wallet',
+      'GET  /api/admin/wallet/stats',
+      'GET  /api/admin/wallet/transactions',
     ],
   });
 });
