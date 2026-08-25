@@ -90,6 +90,99 @@ function calculateContributionCredit(amount, paymentMethod = 'mtn') {
   };
 }
 
+
+// ── Record Contriba Platform Fee ──
+// Adds ONLY Contriba platform-fee revenue to the separate platform wallet.
+// Existing organizer wallet logic remains unchanged.
+async function recordPlatformFee({
+  contribution,
+  event,
+  ref,
+  contribaFee,
+}) {
+  const numericFee = Number(contribaFee || 0);
+
+  if (!numericFee || numericFee <= 0) {
+    return;
+  }
+
+  const { data: existingFee, error: existingFeeError } = await supabase
+    .from('platform_transactions')
+    .select('id')
+    .eq('type', 'platform_fee')
+    .eq('contribution_id', contribution.id)
+    .maybeSingle();
+
+  if (existingFeeError) {
+    throw existingFeeError;
+  }
+
+  if (existingFee) {
+    console.log(
+      `Platform fee already recorded for contribution ${contribution.id}`
+    );
+    return;
+  }
+
+  const { data: insertedFee, error: feeInsertError } = await supabase
+    .from('platform_transactions')
+    .insert({
+      type: 'platform_fee',
+      amount: numericFee,
+      reference: ref,
+      contribution_id: contribution.id,
+      event_id: event.id,
+      status: 'success',
+      description: `Contriba platform fee from contribution to "${event.title}"`,
+    })
+    .select()
+    .single();
+
+  if (feeInsertError) {
+    if (feeInsertError.code === '23505') {
+      console.log(`Platform fee already recorded for ${ref}`);
+      return;
+    }
+
+    throw feeInsertError;
+  }
+
+  const { data: platformWallet, error: platformWalletError } = await supabase
+    .from('platform_wallet')
+    .select('*')
+    .limit(1)
+    .single();
+
+  if (platformWalletError || !platformWallet) {
+    throw platformWalletError || new Error('Platform wallet not found');
+  }
+
+  const { error: platformWalletUpdateError } = await supabase
+    .from('platform_wallet')
+    .update({
+      balance:
+        Number(platformWallet.balance || 0) +
+        Number(insertedFee.amount || 0),
+
+      total_fees_earned:
+        Number(platformWallet.total_fees_earned || 0) +
+        Number(insertedFee.amount || 0),
+
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', platformWallet.id);
+
+  if (platformWalletUpdateError) {
+    throw platformWalletUpdateError;
+  }
+
+  console.log(
+    `Platform wallet credited RWF ${Number(
+      insertedFee.amount || 0
+    ).toLocaleString()} from ${ref}`
+  );
+}
+
 // ── Process Successful Payment ──
 async function processSuccessfulPayment(ref) {
   try {
@@ -194,6 +287,13 @@ async function processSuccessfulPayment(ref) {
       });
 
     if (transactionError) throw transactionError;
+
+    await recordPlatformFee({
+      contribution,
+      event,
+      ref,
+      contribaFee,
+    });
 
     const { data: owner } = await supabase
       .from('users')
